@@ -30,6 +30,19 @@ function clamp_offset(offset: number, length: number, count: number): number {
     return Math.max(0, Math.min(offset, maximum));
 }
 
+/** Whether a window shares the band of an area along one axis, without overlapping it
+ *
+ * The windows of a stack are cascaded inside of the area which the stack occupies,
+ * so the windows which lie beside the stack are the ones which share the band of
+ * that area on the other axis.
+ */
+export function shares_band(area: Rectangular, rect: Rectangular, sideways: boolean): boolean {
+    const overlaps_x = rect.x < area.x + area.width && rect.x + rect.width > area.x;
+    const overlaps_y = rect.y < area.y + area.height && rect.y + rect.height > area.y;
+
+    return sideways ? overlaps_y && !overlaps_x : overlaps_x && !overlaps_y;
+}
+
 /** The title of a stacked window, which is drawn over the exposed part of its title bar */
 interface DrawnTitle {
     entity: Entity;
@@ -67,7 +80,7 @@ export class Stack {
     workspace: number;
 
     /** The area which the windows of this stack are arranged within */
-    private rect: Rectangular = { width: 0, height: 0, x: 0, y: 0 };
+    rect: Rectangular = { width: 0, height: 0, x: 0, y: 0 };
 
     /** Whether the windows may be displayed, disabled while one of them is fullscreen */
     private visible: boolean = true;
@@ -80,7 +93,7 @@ export class Stack {
 
     /** How often the pile was rotated in a row, and in which direction */
     private cycled: number = 0;
-    private cycled_forward: boolean = true;
+    private cycled_next: boolean = true;
 
     /** The offsets which the current arrangement was computed with */
     private offsets_used: [number, number] = [0, 0];
@@ -175,34 +188,37 @@ export class Stack {
     /** Displays the next window of the stack in front of the others
      *
      * The pile is rotated, so that every window takes its turn in front of the
-     * others. Cycling forwards displays the window which is directly behind the
-     * window in front, and moves the window in front to the back of the pile,
-     * whereas cycling backwards undoes a cycle.
+     * others. The next window of the pile follows the window which is displayed in
+     * front, which is the window at the back of the pile once the window in front
+     * is its last, and the previous window is the one behind the window in front.
      *
      * Returns null when the stack holds fewer than two windows, or once the whole
-     * stack has been displayed in front, which means that focus may be shifted
-     * out of the stack instead.
+     * stack has been displayed in front, which means that the keys of an axis have
+     * no window to move focus to.
      */
-    cycle(forward: boolean): null | Entity {
+    cycle(next: boolean): null | Entity {
         const count = this.display.length;
 
         if (this.arranging || count < 2) return null;
 
-        if (forward === this.cycled_forward) {
+        if (next === this.cycled_next) {
             if (this.cycled >= count - 1) return null;
 
             this.cycled += 1;
         } else {
-            // Cycling backwards undoes one of the rotations which were made in the
-            // other direction.
-            this.cycled_forward = forward;
+            // Cycling in the other direction undoes one of the rotations which were
+            // made in this direction.
+            this.cycled_next = next;
             this.cycled = Math.max(0, this.cycled - 1);
         }
 
-        if (forward) {
-            this.display.unshift(this.display.pop() as Entity);
-        } else {
+        if (next) {
+            // The window at the back of the pile is displayed in front.
             this.display.push(this.display.shift() as Entity);
+        } else {
+            // The window behind the window in front is displayed in front, and the
+            // window in front moves to the back of the pile.
+            this.display.unshift(this.display.pop() as Entity);
         }
 
         this.reorder = true;
@@ -216,7 +232,7 @@ export class Stack {
     /** Allows the direction keys to cycle through the whole stack once more */
     reset_cycle() {
         this.cycled = 0;
-        this.cycled_forward = true;
+        this.cycled_next = true;
     }
 
     /** Removes a window from the stack, returning the position which it had */

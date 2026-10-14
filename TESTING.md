@@ -56,8 +56,13 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Full-screen an application within the stack, then quit the application-- the remaining windows should be visible.
 - [ ] Every window of the stack is visible as a cascading pile, and the entire pile fits inside of the stack's area.
 - [ ] Clicking a window of the stack displays it completely, in front of the other windows of the stack.
-- [ ] Cycling with the direction keys brings every window of the stack to the front in turn (`Super` + `Left`/`Up` and `Super` + `Right`/`Down` rotate in opposite directions).
-- [ ] Once every window of the stack has been displayed in front, the direction keys shift focus out of the stack, and skip the stack's other windows.
+- [ ] A stack which has windows to its left or right is cycled with `Super` + `Up`/`Down`, while `Super` + `Left`/`Right` moves focus between the tiles.
+- [ ] A stack which has windows above or below it is cycled with `Super` + `Left`/`Right`, while `Super` + `Up`/`Down` moves focus between the tiles.
+- [ ] A stack which has windows both beside it and above or below it is not cycled, and every direction key moves focus between the tiles.
+- [ ] Cycling brings every window of the stack to the front in turn, forwards with `Right`/`Down` and backwards with `Left`/`Up`.
+- [ ] Once every window of the stack has been displayed in front, the next press displays the windows again from the start.
+- [ ] The direction keys which move focus between the tiles land on the window which the neighbouring stack displays in front, and never on the window behind it.
+- [ ] A stack which fills the display is still cycled by every direction key, as there is no tile to move focus to.
 - [ ] Focus can still be shifted out of a stack which holds a single window.
 - [ ] Cycling a stack which fills the display keeps displaying the next window, since there is no window to shift focus to.
 - [ ] Changing the stack offsets in the preferences re-arranges the stacks, and a value of `0` displays the windows on top of one another.

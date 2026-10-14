@@ -29,6 +29,8 @@ import type { ExtEvent } from './events.js';
 import { Rectangle } from './rectangle.js';
 import type { Indicator } from './panel_settings.js';
 import type { Launcher } from './launcher.js';
+import type { Stack } from './stack.js';
+import { shares_band } from './stack.js';
 
 import { Fork } from './fork.js';
 
@@ -682,52 +684,80 @@ export class Ext extends Ecs.System<ExtEvent> {
     }
 
     focus_left() {
-        this.stack_cycle(false, (filter) => this.focus_selector.left(this, null, filter));
+        this.stack_cycle(Tiling.Direction.Left);
     }
 
     focus_right() {
-        this.stack_cycle(true, (filter) => this.focus_selector.right(this, null, filter));
+        this.stack_cycle(Tiling.Direction.Right);
     }
 
     focus_down() {
-        this.stack_cycle(true, (filter) => this.focus_selector.down(this, null, filter));
+        this.stack_cycle(Tiling.Direction.Down);
     }
 
     focus_up() {
-        this.stack_cycle(false, (filter) => this.focus_selector.up(this, null, filter));
+        this.stack_cycle(Tiling.Direction.Up);
     }
 
     focus_window(): Window.ShellWindow | null {
         return this.get_window(display.get_focus_window());
     }
 
-    /** Cycles through the stack which the focused window belongs to
+    /** Cycles through the stack which the focused window belongs to, or shifts focus
      *
-     * Every window of the stack takes its turn in front of the others, and the
-     * pile is rotated by each press. Once the whole stack has been displayed in
-     * front, focus is shifted out of the stack in the direction which was
-     * pressed, skipping the stack's other windows. When the focused window is
-     * not part of a stack, focus is shifted immediately.
+     * Every window of the stack takes its turn in front of the others, forwards
+     * with the keys which point down or right, and the whole stack is displayed
+     * again by the press after the last of its windows was displayed in front.
+     *
+     * The keys of an axis which has windows beside the stack keep moving the focus
+     * to them, which leaves the cycle of the stack to the keys of the other axis: a
+     * stack which has windows to its left or right is cycled with the vertical
+     * keys, and a stack which has windows above or below it is cycled with the
+     * horizontal keys. A stack which has windows in both axes is not cycled at all,
+     * and one which has none beside it is cycled by every direction key.
      */
-    stack_cycle(
-        forward: boolean,
-        selector: (filter?: (window: Window.ShellWindow) => boolean) => Window.ShellWindow | null,
-    ) {
+    stack_cycle(direction: Tiling.Direction) {
+        // The keys which point down or right display the next window of the pile.
+        const next = direction === Tiling.Direction.Right || direction === Tiling.Direction.Down;
+
+        /** Fetches the closest window in the pressed direction */
+        const select = (filter?: (window: Window.ShellWindow) => boolean) => {
+            switch (direction) {
+                case Tiling.Direction.Left:
+                    return this.focus_selector.left(this, null, filter);
+                case Tiling.Direction.Right:
+                    return this.focus_selector.right(this, null, filter);
+                case Tiling.Direction.Up:
+                    return this.focus_selector.up(this, null, filter);
+                case Tiling.Direction.Down:
+                    return this.focus_selector.down(this, null, filter);
+            }
+        };
+
         const focused = this.focus_window();
         const found = focused === null ? null : this.auto_tiler?.find_stack(focused.entity) ?? null;
         const stack = found === null ? null : (found[1].inner as node.NodeStack);
         const container = stack === null ? null : this.auto_tiler?.forest.stacks.get(stack.idx) ?? null;
 
         if (stack === null || container === null) {
-            this.activate_window(selector());
+            this.activate_window(select());
             return;
         }
 
         const idx = stack.idx;
+        const sideways = direction === Tiling.Direction.Left || direction === Tiling.Direction.Right;
+
+        // The windows of the stack are not around it.
+        const outside = (window: Window.ShellWindow) => window.stack !== idx;
+
+        if (this.stack_has_neighbours(container, outside, sideways)) {
+            this.activate_window(select(outside));
+            return;
+        }
 
         /** Displays the next window of the stack in front, if it may be cycled */
         const cycle = () => {
-            const entity = container.cycle(forward);
+            const entity = container.cycle(next);
             const window = entity === null ? null : this.windows.get(entity);
 
             if (window) window.activate();
@@ -736,19 +766,35 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         if (cycle()) return;
 
-        // Every window of the stack has been displayed in front of the others,
-        // so focus is shifted out of the stack in the pressed direction.
-        const target = selector((window) => window.stack !== idx);
-
-        if (target) {
-            this.activate_window(target);
-            return;
-        }
-
-        // There is no window in that direction, so the stack is cycled again
-        // instead of wasting the key press.
+        // Every window of the stack has been displayed in front of the others, and
+        // the keys of this axis have no window to move the focus to, so the stack
+        // is cycled again rather than leaving the key press without an effect.
         container.reset_cycle();
         cycle();
+    }
+
+    /** Whether the windows around a stack lie beside it, or above and below it
+     *
+     * The area which the stack occupies is compared with the windows around it,
+     * rather than the window which it displays in front, as the offsets of the
+     * pile place that window inside of the area.
+     */
+    private stack_has_neighbours(
+        container: Stack,
+        outside: (window: Window.ShellWindow) => boolean,
+        sideways: boolean,
+    ): boolean {
+        const area = container.rect;
+
+        for (const window of this.windows.values()) {
+            if (!outside(window) || window.meta.minimized) continue;
+            if (window.meta.get_monitor() !== container.monitor) continue;
+            if (window.workspace_id() !== container.workspace) continue;
+
+            if (shares_band(area, window.rect(), sideways)) return true;
+        }
+
+        return false;
     }
 
     /// Fetches the window component from the entity associated with the metacity window metadata.

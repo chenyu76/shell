@@ -1,3 +1,4 @@
+import * as Ecs from './ecs.js';
 import * as Geom from './geom.js';
 
 import type { ShellWindow } from './window.js';
@@ -21,7 +22,9 @@ export class FocusSelector {
     ): ShellWindow | null {
         window = window ?? ext.focus_window();
         if (window) {
-            let window_list = ext.active_window_list();
+            // A stack is represented by the window which it displays in front, as
+            // the windows behind it are hidden by that window.
+            let window_list = ext.active_window_list().filter((window) => in_front(ext, window));
 
             if (filter) window_list = window_list.filter(filter);
 
@@ -46,6 +49,16 @@ export class FocusSelector {
     up(ext: Ext, window: ShellWindow | null, filter?: (window: ShellWindow) => boolean): ShellWindow | null {
         return this.select(ext, window_up, window, filter);
     }
+}
+
+/** Whether this window is displayed in front of the stack which it belongs to */
+function in_front(ext: Ext, window: ShellWindow): boolean {
+    if (window.stack === null) return true;
+
+    const stack = ext.auto_tiler?.forest.stacks.get(window.stack);
+    if (!stack) return true;
+
+    return Ecs.entity_eq(stack.active, window.entity);
 }
 
 function select(

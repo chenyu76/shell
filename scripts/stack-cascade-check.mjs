@@ -23,7 +23,8 @@ globalThis.global = {
     },
 };
 
-const { Stack } = await import('../target/stack.js');
+const stack_module = await import('../target/stack.js');
+const { Stack } = stack_module;
 
 let next_entity = 1;
 function make_entity() {
@@ -242,6 +243,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     const fronts = [front()];
     let presses = 0;
 
+    // Cycling forwards is the direction which Right and Down use.
     while (stack.cycle(true) !== null) {
         presses += 1;
         fronts.push(front());
@@ -253,10 +255,15 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
         fronts.join(' -> '),
     );
 
+    // The next window of the pile follows the window which is displayed in front,
+    // which is the window at the back of the pile once the window in front is the
+    // last of the pile.
+    const expected = [start_order[start_order.length - 1], ...start_order.slice(0, -1)];
+
     check(
-        'cycling forwards displays the windows from the front of the pile to the back',
-        fronts.join(',') === [...start_order].reverse().join(','),
-        `${fronts.join(',')} vs ${[...start_order].reverse().join(',')}`,
+        'cycling forwards displays the window in front, then the windows of the pile from its back',
+        fronts.join(',') === expected.join(','),
+        `${fronts.join(',')} vs ${expected.join(',')}`,
     );
 
     check(
@@ -316,10 +323,10 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
         trio.stack.active = trio.windows[0].entity;
         trio.stack.auto_activate();
 
-        // Cycle once, then display a window of the stack by other means, which
-        // must allow the whole stack to be cycled again.
+        // Cycle once, then display a window which is behind the one in front by
+        // other means, which must allow the whole stack to be cycled again.
         trio.stack.cycle(true);
-        trio.stack.activate(trio.windows[2].entity);
+        trio.stack.activate(trio.stack.display[0]);
 
         let rotations = 0;
         while (trio.stack.cycle(true) !== null) rotations += 1;
@@ -398,6 +405,49 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     stack.auto_activate();
 
     check('the order of the pile is kept when the stack is rebuilt', order() === arranged, `${arranged} -> ${order()}`);
+}
+
+// --- the windows around a stack -------------------------------------------------
+{
+    // One window on the left half, and a pile of two on the right half.
+    const left = { x: 0, y: 100, width: 960, height: 1080 };
+    const pile = { x: 960, y: 100, width: 960, height: 1080 };
+
+    check(
+        'a window on the left of a stack is beside it',
+        stack_module.shares_band(pile, left, true) && !stack_module.shares_band(pile, left, false),
+        'it shares the band of the other axis only',
+    );
+
+    // A pile which occupies the top half, with a window below it.
+    const top = { x: 0, y: 100, width: 1920, height: 540 };
+    const below = { x: 0, y: 640, width: 1920, height: 540 };
+
+    check(
+        'a window below a stack is not beside it',
+        stack_module.shares_band(top, below, false) && !stack_module.shares_band(top, below, true),
+        'it shares the band of the other axis only',
+    );
+
+    check(
+        'a window which overlaps the stack is in neither band',
+        !stack_module.shares_band(pile, { x: 900, y: 200, width: 400, height: 400 }, true) &&
+            !stack_module.shares_band(pile, { x: 900, y: 200, width: 400, height: 400 }, false),
+    );
+
+    check(
+        'a window which touches a stack without overlapping it is not around it',
+        !stack_module.shares_band(pile, left, false) &&
+            !stack_module.shares_band(pile, { ...left, x: 960 - 960, width: 960 }, false),
+    );
+
+    check(
+        'the windows of a pile are inside its area',
+        [0, 1].every((idx) => {
+            const slot = { x: pile.x + idx * 12, y: pile.y + idx * 40, width: pile.width - 12, height: pile.height - 40 };
+            return !stack_module.shares_band(pile, slot, true) && !stack_module.shares_band(pile, slot, false);
+        }),
+    );
 }
 
 // --- titles drawn over the pile ------------------------------------------------
