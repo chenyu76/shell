@@ -81,6 +81,9 @@ const STYLESHEET_PATHS = ['light', 'dark', 'highcontrast'].map(stylesheet_path);
 const STYLESHEETS = STYLESHEET_PATHS.map((path) => Gio.File.new_for_path(path));
 const GNOME_VERSION = PACKAGE_VERSION;
 
+/** How long a function which waits for queued movements may be delayed */
+const MOVEMENT_WAIT_TIMEOUT = 500;
+
 enum Style {
     Light,
     Dark,
@@ -212,6 +215,9 @@ export class Ext extends Ecs.System<ExtEvent> {
     /** Stores movements that have been queued */
     movements: Ecs.Storage<Rectangular> = this.register_storage();
 
+    /** Functions which are waiting for the queued movements to be applied */
+    private movement_waiters: Array<() => void> = new Array();
+
     /** Store for names associated with windows */
     names: Ecs.Storage<string> = this.register_storage();
 
@@ -333,7 +339,6 @@ export class Ext extends Ecs.System<ExtEvent> {
                     const { x, y, width, height } = movement;
 
                     window.meta.move_resize_frame(true, x, y, width, height);
-                    window.meta.move_frame(true, x, y);
 
                     this.monitors.insert(window.entity, [win.meta.get_monitor(), win.workspace_id()]);
 
@@ -341,6 +346,8 @@ export class Ext extends Ecs.System<ExtEvent> {
                         win.activate_after_move = false;
                         win.activate();
                     }
+
+                    this.run_movement_waiters();
 
                     return;
                 }
@@ -480,6 +487,11 @@ export class Ext extends Ecs.System<ExtEvent> {
     }
 
     connect_window(win: Window.ShellWindow) {
+        // Windows are connected once, but this is called again when a window's
+        // class is set after it was mapped. Connecting twice would duplicate the
+        // size handlers, and with them the reflows which they queue.
+        if (this.size_signals.contains(win.entity)) return;
+
         const size_event = () => {
             const old = this.size_requests.get(win.meta);
 
@@ -927,10 +939,10 @@ export class Ext extends Ecs.System<ExtEvent> {
             ) {
                 if (prev.rect().contains(win.rect())) {
                     if (prev.is_maximized()) {
-                        prev.meta.unmaximize(Meta.MaximizeFlags.BOTH);
+                        prev.meta.unmaximize();
                     }
                 } else if (prev.stack) {
-                    prev.meta.unmaximize(Meta.MaximizeFlags.BOTH);
+                    prev.meta.unmaximize();
                     this.auto_tiler.forest.stacks.get(prev.stack)?.restack();
                 }
             }
@@ -979,9 +991,20 @@ export class Ext extends Ecs.System<ExtEvent> {
         });
     }
 
+    /** Displays the active hint around the focused window
+     *
+     * Every window reports its size and position changes here, so the work is
+     * skipped while the hint of the focused window is already displayed. The hint
+     * of another window can never be displayed, as it is hidden when a window
+     * loses the focus.
+     */
     show_border_on_focused() {
-        this.hide_all_borders();
         const focus = this.focus_window();
+
+        if (focus?.border?.visible) return;
+
+        this.hide_all_borders();
+
         if (focus) focus.show_border();
     }
 
@@ -1061,7 +1084,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                     compare.is_maximized() &&
                     win.entity[0] !== compare.entity[0]
                 ) {
-                    compare.meta.unmaximize(Meta.MaximizeFlags.BOTH);
+                    compare.meta.unmaximize();
                 }
             }
         }
@@ -1293,9 +1316,9 @@ export class Ext extends Ecs.System<ExtEvent> {
 
             if (this.auto_tiler) {
                 if (this.is_floating(win)) {
-                    win.meta.unmaximize(Meta.MaximizeFlags.HORIZONTAL);
-                    win.meta.unmaximize(Meta.MaximizeFlags.VERTICAL);
-                    win.meta.unmaximize(Meta.MaximizeFlags.BOTH);
+                    // GNOME 51 removed the maximize flags, so unmaximizing
+                    // restores both directions at once.
+                    win.meta.unmaximize();
                 }
 
                 this.register(Events.window_move(this, win, rect));
@@ -1303,7 +1326,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                 win.move(this, rect, () => { });
                 // if the resulting dimensions of rect == next
                 if (rect.width == next_area.width && rect.height == next_area.height) {
-                    win.meta.maximize(Meta.MaximizeFlags.BOTH);
+                    win.meta.maximize();
                 }
             }
         }
@@ -2306,17 +2329,37 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.register_fn(() => this.switch_to_workspace(original));
     }
 
-    /** Calls a function once windows are no longer queued for movement. */
-    schedule_idle(func: () => boolean): boolean {
-        if (!this.movements.is_empty()) {
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                if (!this.movements.is_empty()) return true;
-                return func();
-            });
-        } else {
+    /** Calls a function once windows are no longer queued for movement.
+     *
+     * Queued movements are applied by the event loop, so the function is run as
+     * soon as the queue has drained, rather than polling for it. A timeout
+     * ensures that a movement which is never applied cannot delay it forever.
+     */
+    after_movements(func: () => void) {
+        if (this.movements.is_empty()) {
             func();
+            return;
         }
-        return false;
+
+        this.movement_waiters.push(func);
+
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, MOVEMENT_WAIT_TIMEOUT, () => {
+            const idx = this.movement_waiters.indexOf(func);
+
+            if (idx !== -1) {
+                this.movement_waiters.splice(idx, 1);
+                func();
+            }
+
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    /** Runs the functions which are waiting for the movement queue to drain */
+    private run_movement_waiters() {
+        if (!this.movements.is_empty()) return;
+
+        for (const waiter of this.movement_waiters.splice(0)) waiter();
     }
 
     should_ignore_workspace(monitor: number): boolean {
@@ -2633,14 +2676,12 @@ export class Ext extends Ecs.System<ExtEvent> {
             this.monitors.insert(entity, [win.meta.get_monitor(), win.workspace_id()]);
 
             const grab_focus = () => {
-                this.schedule_idle(() => {
+                this.after_movements(() => {
                     this.windows.with(entity, (window) => {
                         window.meta.raise();
                         window.meta.unminimize();
                         window.activate(false);
                     });
-
-                    return false;
                 });
             };
 

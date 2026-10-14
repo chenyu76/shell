@@ -28,6 +28,9 @@ let SCHEDULED_RESTACK: number | null = null;
 /** Contains SourceID of an active hint operation. */
 let ACTIVE_HINT_SHOW_ID: number | null = null;
 
+/** The style which was last applied to the shared overlay actor. */
+let overlay_style: string | null = null;
+
 const WM_TITLE_BLACKLIST: Array<string> = [
     'Firefox',
     'Nightly', // Firefox Nightly
@@ -87,6 +90,9 @@ export class ShellWindow {
     };
 
     private border_size = 0;
+
+    /** The style which was last applied to the border of this window. */
+    private border_style: null | string = null;
 
     constructor(entity: Entity, window: Meta.Window, window_app: any, ext: Ext) {
         this.window_app = window_app;
@@ -200,7 +206,15 @@ export class ShellWindow {
             }
 
             gdk.alpha = overlay_alpha;
-            this.ext.overlay.set_style(`background: ${gdk.to_string()}`);
+
+            // The overlay is shared by every window, so it is only restyled when
+            // its color actually changed.
+            const style = `background: ${gdk.to_string()}`;
+
+            if (style !== overlay_style) {
+                overlay_style = style;
+                this.ext.overlay.set_style(style);
+            }
         }
 
         this.update_border_style();
@@ -373,7 +387,7 @@ export class ShellWindow {
 
         if (actor) {
             if (this.is_maximized()) {
-                meta.unmaximize(Meta.MaximizeFlags.BOTH);
+                meta.unmaximize();
             }
             actor.remove_all_transitions();
 
@@ -530,8 +544,6 @@ export class ShellWindow {
             const count = restacks;
             restacks += 1;
 
-            if (!this.actor_exists && count === 0) return true;
-
             if (count === 3) {
                 if (SCHEDULED_RESTACK !== null) GLib.source_remove(SCHEDULED_RESTACK);
                 SCHEDULED_RESTACK = null;
@@ -541,7 +553,15 @@ export class ShellWindow {
             const actor = this.meta.get_compositor_private();
             const win_group = global.window_group;
 
-            if (actor && border && win_group) {
+            // A border which is not displayed does not need to be re-stacked. It
+            // is displayed for the focused window only, and is destroyed along
+            // with its window.
+            if (!border || !border.visible) {
+                SCHEDULED_RESTACK = null;
+                return false;
+            }
+
+            if (actor && win_group) {
                 this.update_border_layout();
                 // move the border above the window group first
                 win_group.set_child_above_sibling(border, null);
@@ -640,9 +660,18 @@ export class ShellWindow {
         const { settings } = this.ext;
         const color_value = settings.hint_color_rgba();
         const radius_value = settings.active_hint_border_radius();
-        if (this.border) {
-            this.border.set_style(`border-color: ${color_value}; border-radius: ${radius_value}px;`);
-        }
+        const border = this.border;
+
+        if (!border) return;
+
+        // Setting a style re-resolves the theme of the actor, so it is only done
+        // when the style actually changed.
+        const style = `border-color: ${color_value}; border-radius: ${radius_value}px;`;
+
+        if (style === this.border_style) return;
+
+        this.border_style = style;
+        border.set_style(style);
     }
 
     private wm_class_changed() {
