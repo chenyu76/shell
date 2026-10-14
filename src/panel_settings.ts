@@ -16,6 +16,7 @@ import { Button } from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import GLib from 'gi://GLib';
 import { spawn } from 'resource:///org/gnome/shell/misc/util.js';
 import { get_current_path } from './paths.js';
+import { RuleTarget } from './config.js';
 // import * as Settings from './settings.js';
 
 export class Indicator {
@@ -81,6 +82,7 @@ export class Indicator {
 
         bm.addMenuItem(this.toggle_tiled);
         bm.addMenuItem(floating_window_exceptions(ext, bm));
+        bm.addMenuItem(pile_window_titles(ext, bm));
 
         bm.addMenuItem(menu_separator(''));
         bm.addMenuItem(shortcuts(bm));
@@ -128,21 +130,21 @@ function settings_button(menu: any): any {
     return item;
 }
 
-function floating_window_exceptions(ext: Ext, menu: any): any {
-    let label = new St.Label({ text: 'Floating Window Exceptions' });
+/** A menu item which runs an action, and closes the menu once it was handled */
+function next_item(text: string, menu: any, action: () => void): any {
+    let label = new St.Label({ text });
     label.set_x_expand(true);
 
     let icon = new St.Icon({ icon_name: 'go-next-symbolic', icon_size: 16 });
 
-    let widget = new St.BoxLayout();
+    let widget = new St.BoxLayout({ x_expand: true });
     widget.add_child(label);
     widget.add_child(icon);
-    widget.set_x_expand(true);
 
     let base = new PopupBaseMenuItem();
     base.add_child(widget);
     base.connect('activate', () => {
-        ext.exception_dialog();
+        action();
 
         GLib.timeout_add(GLib.PRIORITY_LOW, 300, () => {
             menu.close();
@@ -151,6 +153,15 @@ function floating_window_exceptions(ext: Ext, menu: any): any {
     });
 
     return base;
+}
+
+function floating_window_exceptions(ext: Ext, menu: any): any {
+    return next_item('Floating Window Exceptions', menu, () => ext.rules_dialog(RuleTarget.Float));
+}
+
+/** Opens the list of the windows whose title is drawn over the pile */
+function pile_window_titles(ext: Ext, menu: any): any {
+    return next_item('Window Titles in Piles', menu, () => ext.rules_dialog(RuleTarget.PileTitle));
 }
 
 function shortcuts(menu: any): any {

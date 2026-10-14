@@ -84,6 +84,46 @@ export interface FloatRule {
     title?: string;
 }
 
+/** The list of rules which a window may be added to */
+export enum RuleTarget {
+    /** Windows which float instead of tiling */
+    Float,
+    /** Windows whose title is drawn over the pile when they are not displayed in front */
+    PileTitle,
+}
+
+/** The name of the list which a target adds rules to, which is also its key in the config file */
+export function rule_target_name(target: RuleTarget): string {
+    return target === RuleTarget.Float ? 'float' : 'pile_titles';
+}
+
+/** The list which the name of a target refers to */
+export function rule_target_from_name(name: string): RuleTarget {
+    return name === rule_target_name(RuleTarget.PileTitle) ? RuleTarget.PileTitle : RuleTarget.Float;
+}
+
+/** Whether any of these rules matches the window, which may not have a class or a title yet */
+function rules_match(rules: Array<WindowRule>, wclass: string | null, title: string | null): boolean {
+    for (const rule of rules) {
+        if (rule.class && !new RegExp(rule.class, 'i').test(wclass ?? '')) continue;
+        if (rule.title && !new RegExp(rule.title, 'i').test(title ?? '')) continue;
+
+        return !rule.disabled;
+    }
+
+    return false;
+}
+
+/** Adds a rule to a list, unless an equal one is already in it */
+function push_rule(rules: Array<WindowRule>, rule: WindowRule): boolean {
+    for (const compare of rules) {
+        if (compare.class === rule.class && compare.title === rule.title) return false;
+    }
+
+    rules.push(rule);
+    return true;
+}
+
 export class Config {
     /** List of windows that should float, regardless of their WM hints */
     float: Array<FloatRule> = [];
@@ -94,72 +134,55 @@ export class Config {
      */
     skiptaskbarhidden: Array<WindowRule> = [];
 
+    /**
+     * List of windows whose title is drawn over the exposed part of their title
+     * bar while they are stacked behind another window
+     */
+    pile_titles: Array<WindowRule> = [];
+
     /** Logs window details on focus of window */
     log_on_focus: boolean = false;
 
-    /** Add a floating exception which matches by wm_class */
-    add_app_exception(wmclass: string) {
-        for (const r of this.float) {
-            if (r.class === wmclass && r.title === undefined) return;
+    /** Adds a rule for the selected window to one of the rule lists */
+    add_rule(target: RuleTarget, wmclass: string, title: null | string = null) {
+        const rule = title === null ? { class: wmclass } : { class: wmclass, title };
+
+        if (push_rule(this.rules(target), rule)) this.sync_to_disk();
+    }
+
+    /** Removes the rules of one of the rule lists which match this window */
+    remove_rule(target: RuleTarget, wmclass: string | undefined, title: string | undefined) {
+        const rules = this.rules(target);
+
+        for (let idx = rules.length - 1; idx >= 0; idx -= 1) {
+            if (rules[idx].class === wmclass && rules[idx].title === title) rules.splice(idx, 1);
         }
 
-        this.float.push({ class: wmclass });
         this.sync_to_disk();
     }
 
-    /** Add a floating exception which matches by wm_title */
-    add_window_exception(wmclass: string, title: string) {
-        for (const r of this.float) {
-            if (r.class === wmclass && r.title === title) return;
-        }
+    /** The list which a target adds rules to */
+    private rules(target: RuleTarget): Array<WindowRule> {
+        return target === RuleTarget.Float ? this.float : this.pile_titles;
+    }
 
-        this.float.push({ class: wmclass, title });
-        this.sync_to_disk();
+    /** Whether this window is drawn over the pile when it is not displayed in front */
+    window_has_pile_title(wclass: string | null, title: string | null): boolean {
+        return rules_match(this.pile_titles, wclass, title);
     }
 
     window_shall_float(wclass: string, title: string): boolean {
-        for (const rule of this.float.concat(DEFAULT_FLOAT_RULES)) {
-            if (rule.class) {
-                if (!new RegExp(rule.class, 'i').test(wclass)) {
-                    continue;
-                }
-            }
-
-            if (rule.title) {
-                if (!new RegExp(rule.title, 'i').test(title)) {
-                    continue;
-                }
-            }
-
-            return rule.disabled ? false : true;
-        }
-
-        return false;
+        return rules_match(this.float.concat(DEFAULT_FLOAT_RULES), wclass, title);
     }
 
     skiptaskbar_shall_hide(meta_window: any) {
-        let wmclass = meta_window.get_wm_class();
-        let wmtitle = meta_window.get_title();
-
         if (!meta_window.is_skip_taskbar()) return false;
 
-        for (const rule of this.skiptaskbarhidden.concat(SKIPTASKBAR_EXCEPTIONS)) {
-            if (rule.class) {
-                if (!new RegExp(rule.class, 'i').test(wmclass)) {
-                    continue;
-                }
-            }
-
-            if (rule.title) {
-                if (!new RegExp(rule.title, 'i').test(wmtitle)) {
-                    continue;
-                }
-            }
-
-            return rule.disabled ? false : true;
-        }
-
-        return false;
+        return rules_match(
+            this.skiptaskbarhidden.concat(SKIPTASKBAR_EXCEPTIONS),
+            meta_window.get_wm_class(),
+            meta_window.get_title(),
+        );
     }
 
     reload() {
@@ -168,6 +191,7 @@ export class Config {
         if (conf.tag === 0) {
             let c = conf.value;
             this.float = c.float;
+            this.pile_titles = c.pile_titles ?? [];
             this.log_on_focus = c.log_on_focus;
         } else {
             log(`error loading conf: ${conf.why}`);
@@ -213,24 +237,6 @@ export class Config {
         if (found) swap_remove(this.float, index);
 
         this.sync_to_disk();
-    }
-
-    remove_user_exception(wmclass: string | undefined, wmtitle: string | undefined) {
-        let index = 0;
-        let found = new Array();
-        for (const value of this.float.values()) {
-            if (value.class === wmclass && value.title === wmtitle) {
-                found.push(index);
-            }
-
-            index += 1;
-        }
-
-        if (found.length !== 0) {
-            for (const idx of found) swap_remove(this.float, idx);
-
-            this.sync_to_disk();
-        }
     }
 
     static from_json(json: string): Config {

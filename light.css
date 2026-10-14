@@ -37,3 +37,10 @@
     padding-top: 6px;
     padding-bottom: 6px;
 }
+
+.pop-shell-pile-title {
+    color: #2f2f2f;
+    font-weight: bold;
+    padding-left: 8px;
+    padding-right: 8px;
+}

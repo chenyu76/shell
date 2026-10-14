@@ -63,6 +63,19 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Changing the stack offsets in the preferences re-arranges the stacks, and a value of `0` displays the windows on top of one another.
 - [ ] Adding and removing windows from a stack does not scramble the order of the pile.
 
+### Window Titles in Piles
+
+- [ ] "Window Titles in Piles" in the panel menu opens the rules editor on the list of the same name, and the editor lists the rules of floating windows when it is opened from "Floating Window Exceptions".
+- [ ] Selecting a window from the editor adds a rule for the window or for its application to the list which the editor was opened with, and returns to that list.
+- [ ] Deleting a rule from either list updates the shell, and the drawn titles are redrawn.
+- [ ] Adding a window with "Window Titles in Piles" draws its title over the part of its title bar which the window behind it exposes, once it is stacked behind another window.
+- [ ] The drawn title is centered in the exposed part of the title bar, both horizontally and vertically.
+- [ ] The window which is displayed in front is never drawn over, as it displays its own title bar.
+- [ ] The drawn titles follow the windows when the pile is rotated, when the offsets are changed, and when a window is added to or removed from the stack.
+- [ ] A window whose title changes updates the drawn title.
+- [ ] The drawn titles are hidden by a window which is dragged, by a fullscreen window in the stack, and by switching to another workspace.
+- [ ] The rules of "Window Titles in Piles" are kept when the Floating Window Exceptions editor saves the configuration.
+
 The arrangement of a stack can additionally be checked without a running shell:
 
 ```

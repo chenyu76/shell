@@ -4,7 +4,8 @@ import Clutter from 'gi://Clutter';
 
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
-export class AddExceptionDialog {
+/** Asks whether a rule is added for one window, or for every window of its application */
+export class AddRuleDialog {
     dialog: Shell.ModalDialog = new ModalDialog.ModalDialog({
         styleClass: 'pop-shell-search modal-dialog',
         destroyOnClose: false,
@@ -13,12 +14,18 @@ export class AddExceptionDialog {
         shouldFadeOut: false,
     });
 
-    constructor(cancel: () => void, this_app: () => void, current_window: () => void, on_close: () => void) {
-        let title = St.Label.new('Add Floating Window Exception');
+    constructor(
+        description: string,
+        cancel: () => void,
+        this_app: () => void,
+        current_window: () => void,
+        on_close: () => void,
+    ) {
+        let title = St.Label.new('Add Window Rule');
         title.set_x_align(Clutter.ActorAlign.CENTER);
         title.set_style('font-weight: bold');
 
-        let desc = St.Label.new('Float the selected window or all windows from the application.');
+        let desc = St.Label.new(description);
         desc.set_x_align(Clutter.ActorAlign.CENTER);
 
         let l = this.dialog.contentLayout;

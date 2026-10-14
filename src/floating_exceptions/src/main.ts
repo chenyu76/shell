@@ -17,11 +17,13 @@ const WM_CLASS_ID = 'pop-shell-exceptions';
 
 interface SelectWindow {
     tag: 0;
+    target: config.RuleTarget;
 }
 
 enum ViewNum {
-    MainView = 0,
+    Float = 0,
     Exceptions = 1,
+    PileTitles = 2,
 }
 
 interface SwitchTo {
@@ -36,13 +38,14 @@ interface ToggleException {
     enable: boolean;
 }
 
-interface RemoveException {
+interface RemoveRule {
     tag: 3;
+    target: config.RuleTarget;
     wmclass: string | undefined;
     wmtitle: string | undefined;
 }
 
-type Event = SelectWindow | SwitchTo | ToggleException | RemoveException;
+type Event = SelectWindow | SwitchTo | ToggleException | RemoveRule;
 
 interface View {
     widget: any;
@@ -50,11 +53,12 @@ interface View {
     callback: (event: Event) => void;
 }
 
-function exceptions_button(): any {
-    let title = Gtk.Label.new('System Exceptions');
+/** A button which opens another view, with a title and a description */
+function next_button(name: string, description_text: string): any {
+    let title = Gtk.Label.new(name);
     title.set_xalign(0);
 
-    let description = Gtk.Label.new('Updated based on validated user reports.');
+    let description = Gtk.Label.new(description_text);
     description.set_xalign(0);
     description.get_style_context().add_class('dim-label');
 
@@ -76,26 +80,35 @@ function exceptions_button(): any {
     return button;
 }
 
-export class MainView implements View {
+export class RulesView implements View {
     widget: any;
 
     callback: (event: Event) => void = () => {};
 
     private list: any;
+    private target: config.RuleTarget;
 
-    constructor() {
+    constructor(
+        target: config.RuleTarget,
+        description: string,
+        next?: { name: string; description: string; view: ViewNum },
+    ) {
+        this.target = target;
+
         let select = Gtk.Button.new_with_label('Select');
         select.set_halign(Gtk.Align.CENTER);
-        select.connect('clicked', () => this.callback({ tag: 0 }));
+        select.connect('clicked', () => this.callback({ tag: 0, target }));
         select.set_margin_bottom(12);
-
-        let exceptions = exceptions_button();
-        exceptions.connect('clicked', () => this.callback({ tag: 1, view: ViewNum.Exceptions }));
 
         this.list = Gtk.ListBox.new();
         this.list.set_selection_mode(Gtk.SelectionMode.NONE);
         this.list.set_header_func(list_header_func);
-        this.list.add(exceptions);
+
+        if (next) {
+            let button = next_button(next.name, next.description);
+            button.connect('clicked', () => this.callback({ tag: 1, view: next.view }));
+            this.list.add(button);
+        }
 
         let scroller = new Gtk.ScrolledWindow();
         scroller.hscrollbar_policy = Gtk.PolicyType.NEVER;
@@ -106,9 +119,7 @@ export class MainView implements View {
         let list_frame = Gtk.Frame.new(null);
         list_frame.add(scroller);
 
-        let desc = new Gtk.Label({
-            label: 'Add exceptions by selecting currently running applications and windows.',
-        });
+        let desc = new Gtk.Label({ label: description });
         desc.set_line_wrap(true);
         desc.set_halign(Gtk.Align.CENTER);
         desc.set_justify(Gtk.Justification.CENTER);
@@ -139,7 +150,7 @@ export class MainView implements View {
 
         button.connect('clicked', () => {
             widget.destroy();
-            this.callback({ tag: 3, wmclass, wmtitle });
+            this.callback({ tag: 3, target: this.target, wmclass, wmtitle });
         });
 
         this.list.add(widget);
@@ -204,17 +215,35 @@ export class ExceptionsView implements View {
 }
 
 class App {
-    main_view: MainView = new MainView();
+    float_view: RulesView = new RulesView(config.RuleTarget.Float, 'Add exceptions by selecting currently running applications and windows.', {
+        name: 'System Exceptions',
+        description: 'Updated based on validated user reports.',
+        view: ViewNum.Exceptions,
+    });
+
+    title_view: RulesView = new RulesView(
+        config.RuleTarget.PileTitle,
+        'Draw the title of these windows over the pile while they are stacked behind another window.',
+        {
+            name: 'Floating Window Exceptions',
+            description: 'Windows which float instead of tiling.',
+            view: ViewNum.Float,
+        },
+    );
+
     exceptions_view: ExceptionsView = new ExceptionsView();
 
     stack: any = Gtk.Stack.new();
     window: any;
+    headerbar: any;
+    back: any;
     config: config.Config = new config.Config();
 
     constructor() {
         this.stack.set_border_width(16);
-        this.stack.add(this.main_view.widget);
+        this.stack.add(this.float_view.widget);
         this.stack.add(this.exceptions_view.widget);
+        this.stack.add(this.title_view.widget);
 
         let back = Gtk.Button.new_from_icon_name('go-previous-symbolic', Gtk.IconSize.BUTTON);
 
@@ -226,6 +255,9 @@ class App {
         headerbar.set_title(TITLE);
         headerbar.pack_start(back);
 
+        this.headerbar = headerbar;
+        this.back = back;
+
         Gtk.Window.set_default_icon_name('application-default');
 
         win.set_wmclass(WM_CLASS_ID, TITLE);
@@ -234,8 +266,6 @@ class App {
         win.get_content_area().add(this.stack);
         win.show_all();
         win.connect('delete-event', () => Gtk.main_quit());
-
-        back.hide();
 
         this.config.reload();
 
@@ -250,30 +280,32 @@ class App {
         for (const value of Array.from<any>(this.config.float)) {
             let wmtitle = value.title ?? undefined;
             let wmclass = value.class ?? undefined;
-            if (!value.disabled) this.main_view.add_rule(wmclass, wmtitle);
+            if (!value.disabled) this.float_view.add_rule(wmclass, wmtitle);
         }
+
+        for (const value of Array.from<any>(this.config.pile_titles)) {
+            let wmtitle = value.title ?? undefined;
+            let wmclass = value.class ?? undefined;
+            if (!value.disabled) this.title_view.add_rule(wmclass, wmtitle);
+        }
+
+        // The shell opens the list which the menu item which started this program
+        // belongs to, and there is no list without a target.
+        const opened = ARGV[0] === config.rule_target_name(config.RuleTarget.PileTitle) ? ViewNum.PileTitles : ViewNum.Float;
+
+        this.show(opened);
 
         let event_handler = (event: Event) => {
             switch (event.tag) {
                 // SelectWindow
                 case 0:
-                    println('SELECT');
+                    println(`SELECT ${config.rule_target_name(event.target)}`);
                     Gtk.main_quit();
                     break;
 
                 // SwitchTo
                 case 1:
-                    switch (event.view) {
-                        case ViewNum.MainView:
-                            this.stack.set_visible_child(this.main_view.widget);
-                            back.hide();
-                            break;
-                        case ViewNum.Exceptions:
-                            this.stack.set_visible_child(this.exceptions_view.widget);
-                            back.show();
-                            break;
-                    }
-
+                    this.show(event.view);
                     break;
 
                 // ToggleException
@@ -283,18 +315,41 @@ class App {
                     println('MODIFIED');
                     break;
 
-                // RemoveException
+                // RemoveRule
                 case 3:
-                    log(`removing exception`);
-                    this.config.remove_user_exception(event.wmclass, event.wmtitle);
+                    log(`removing rule`);
+                    this.config.remove_rule(event.target, event.wmclass, event.wmtitle);
                     println('MODIFIED');
                     break;
             }
         };
 
-        this.main_view.callback = event_handler;
+        this.float_view.callback = event_handler;
         this.exceptions_view.callback = event_handler;
-        back.connect('clicked', () => event_handler({ tag: 1, view: ViewNum.MainView }));
+        this.title_view.callback = event_handler;
+        back.connect('clicked', () => event_handler({ tag: 1, view: ViewNum.Float }));
+    }
+
+    /** Displays one of the lists */
+    private show(view: ViewNum) {
+        // Only the list which the program was opened with has no way back to it.
+        if (view === ViewNum.Float) this.back.hide();
+        else this.back.show();
+
+        switch (view) {
+            case ViewNum.Float:
+                this.stack.set_visible_child(this.float_view.widget);
+                this.headerbar.set_title('Floating Window Exceptions');
+                break;
+            case ViewNum.Exceptions:
+                this.stack.set_visible_child(this.exceptions_view.widget);
+                this.headerbar.set_title('System Exceptions');
+                break;
+            case ViewNum.PileTitles:
+                this.stack.set_visible_child(this.title_view.widget);
+                this.headerbar.set_title('Window Titles in Piles');
+                break;
+        }
     }
 }
 

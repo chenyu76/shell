@@ -195,6 +195,8 @@ declare namespace Clutter {
         get_child_at_index(nth: number): Clutter.Actor | null;
         get_n_children(): number;
         get_parent(): Clutter.Actor | null;
+        get_preferred_height(for_width: number): [number, number];
+        get_preferred_width(for_height: number): [number, number];
         get_stage(): Clutter.Actor | null;
         get_transition(param: string): any | null;
         grab_key_focus(): void;
@@ -398,6 +400,7 @@ declare namespace St {
     }
 
     interface Label extends Widget {
+        clutter_text: any;
         text: string;
     }
 }

@@ -41,3 +41,11 @@
 .pop-shell-entry:indeterminate {
     font-style: italic
 }
+
+.pop-shell-pile-title {
+    background: #FFF;
+    color: #000;
+    font-weight: bold;
+    padding-left: 8px;
+    padding-right: 8px;
+}

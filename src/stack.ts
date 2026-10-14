@@ -3,12 +3,18 @@ import type { Ext } from './extension.js';
 import type { ShellWindow } from './window.js';
 
 import * as Ecs from './ecs.js';
+import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
+import St from 'gi://St';
 
 /** The smallest portion of a stack's area which its windows may be reduced to. */
 const MIN_STACK_FRACTION = 0.5;
 
 /** The smallest size in pixels which a window of a stack may be reduced to. */
 const MIN_WINDOW_SIZE = 64;
+
+/** The smallest height which the exposed part of a title bar may have to hold a title. */
+const MIN_TITLE_BAND = 20;
 
 function contains(entities: Array<Entity>, entity: Entity): boolean {
     return entities.some((compare) => Ecs.entity_eq(compare, entity));
@@ -22,6 +28,13 @@ function clamp_offset(offset: number, length: number, count: number): number {
     const maximum = Math.max(0, (length - minimum) / (count - 1));
 
     return Math.max(0, Math.min(offset, maximum));
+}
+
+/** The title of a stacked window, which is drawn over the exposed part of its title bar */
+interface DrawnTitle {
+    entity: Entity;
+    label: St.Label;
+    signal: SignalID;
 }
 
 /** A stack of windows which are displayed as a cascading pile
@@ -76,11 +89,20 @@ export class Stack {
 
     private restacker: SignalID = global.display.connect('restacked', () => this.restack());
 
+    /** The titles which are drawn over the windows which are not displayed in front */
+    private titles: Array<DrawnTitle> = new Array();
+
+    /** Holds the titles, so that they can be stacked above the windows of this stack at once */
+    private titles_actor: St.Widget = new St.Widget();
+
     constructor(ext: Ext, active: Entity, workspace: number, monitor: number) {
         this.ext = ext;
         this.active = active;
         this.monitor = monitor;
         this.workspace = workspace;
+
+        global.window_group.add_child(this.titles_actor);
+        this.titles_actor.hide();
     }
 
     /** Sets the windows which are in this stack
@@ -98,6 +120,8 @@ export class Stack {
         for (const entity of this.entities) {
             if (!contains(this.display, entity)) this.display.push(entity);
         }
+
+        this.keep_titles(this.entities);
 
         this.reorder = true;
     }
@@ -203,6 +227,8 @@ export class Stack {
         this.entities.splice(idx, 1);
         this.display = this.display.filter((compare) => !Ecs.entity_eq(compare, entity));
 
+        this.keep_titles(this.entities);
+
         if (this.active_id > idx) this.active_id -= 1;
 
         // The window is no longer hidden behind the others.
@@ -232,6 +258,10 @@ export class Stack {
     destroy() {
         global.display.disconnect(this.restacker);
         this.active_disconnect();
+
+        for (const title of this.titles.slice(0)) this.remove_title(title);
+
+        this.titles_actor.destroy();
 
         for (const entity of this.entities.splice(0)) {
             const window = this.ext.windows.get(entity);
@@ -288,6 +318,8 @@ export class Stack {
                 actor.hide();
             }
         }
+
+        this.sync_titles(this.window_rects());
     }
 
     /** Whether the windows of this stack may be displayed on the active workspace */
@@ -393,6 +425,8 @@ export class Stack {
                     if (window && window.actor_exists()) window.meta.raise();
                 }
             }
+
+            this.sync_titles(rects);
         } finally {
             this.arranging = false;
         }
@@ -425,6 +459,123 @@ export class Stack {
 
             ext.size_signals_unblock(window);
         });
+    }
+
+    /** Draws the titles of the windows which are not displayed in front
+     *
+     * Windows which draw their own title bar do not always display their title,
+     * which makes them hard to tell apart from the windows behind them. The
+     * windows which match the `pile_titles` rules get their title drawn over the
+     * exposed part of their title bar instead.
+     */
+    private sync_titles(rects: Array<Rectangular>) {
+        const count = this.display.length;
+        const band = this.offsets_used[1];
+
+        // The window in front displays its own title bar, and a band which is too
+        // small to hold a title is left empty.
+        const showing =
+            count > 1 &&
+            band >= MIN_TITLE_BAND * this.ext.dpi &&
+            this.visible &&
+            this.permitted_to_show() &&
+            !this.is_dragged();
+
+        const drawn = showing
+            ? this.display.slice(0, count - 1).filter((entity) => this.shall_draw_title(entity))
+            : new Array<Entity>();
+
+        this.keep_titles(drawn);
+
+        for (const [idx, entity] of this.display.entries()) {
+            if (!contains(drawn, entity)) continue;
+
+            const window = this.ext.windows.get(entity);
+            if (!window) continue;
+
+            const title = this.titles.find((title) => Ecs.entity_eq(title.entity, entity)) ?? this.add_title(entity, window);
+            const rect = rects[idx];
+            const label = title.label;
+
+            label.text = window.title();
+
+            const [, natural_width] = label.get_preferred_width(-1);
+            const [, natural_height] = label.get_preferred_height(natural_width);
+            const width = Math.min(natural_width, rect.width);
+            const height = Math.min(natural_height, band);
+
+            label.set_size(width, height);
+            label.set_position(
+                rect.x + Math.round((rect.width - width) / 2),
+                rect.y + Math.round((band - height) / 2),
+            );
+        }
+
+        this.titles_actor.visible = this.titles.length > 0;
+        this.raise_titles();
+    }
+
+    /** Whether the title of this window is drawn over the pile */
+    private shall_draw_title(entity: Entity): boolean {
+        const window = this.ext.windows.get(entity);
+
+        return window !== null && this.ext.conf.window_has_pile_title(window.meta.get_wm_class(), window.title());
+    }
+
+    /** Whether a window of this stack is being dragged */
+    private is_dragged(): boolean {
+        const grab = this.ext.grab_op;
+
+        return grab !== null && contains(this.entities, grab.entity);
+    }
+
+    /** Removes the drawn titles of the windows which are not in this list */
+    private keep_titles(entities: Array<Entity>) {
+        for (const title of this.titles.slice(0)) {
+            if (!contains(entities, title.entity)) this.remove_title(title);
+        }
+    }
+
+    private add_title(entity: Entity, window: ShellWindow): DrawnTitle {
+        const label = new St.Label({ style_class: 'pop-shell-pile-title' });
+
+        // The title is centered in the exposed part of the title bar, like the
+        // title of a window which draws its own title bar.
+        label.clutter_text.set_x_align(Clutter.ActorAlign.CENTER);
+        label.clutter_text.set_y_align(Clutter.ActorAlign.CENTER);
+        label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+
+        this.titles_actor.add_child(label);
+
+        const title: DrawnTitle = {
+            entity,
+            label,
+            signal: window.meta.connect('notify::title', () => this.sync_titles(this.window_rects())),
+        };
+
+        this.titles.push(title);
+        return title;
+    }
+
+    private remove_title(title: DrawnTitle) {
+        const idx = this.titles.indexOf(title);
+        if (idx === -1) return;
+
+        const window = this.ext.windows.get(title.entity);
+        if (window) window.meta.disconnect(title.signal);
+
+        this.titles.splice(idx, 1);
+        title.label.destroy();
+    }
+
+    /** Places the titles above the windows of this stack, and below the windows above them */
+    private raise_titles() {
+        const group = global.window_group;
+        const front = this.ext.windows.get(this.active)?.meta.get_compositor_private() ?? null;
+
+        if (front && this.titles_actor.get_parent() === group && front.get_parent() === group) {
+            group.set_child_above_sibling(this.titles_actor, front);
+        }
     }
 
     /** Connects the change handlers to a window which is displayed in front */
@@ -461,9 +612,7 @@ export class Stack {
 
     /** Runs the callback, unless a window of this stack is being dragged */
     private on_grab(callback: () => void) {
-        const grab = this.ext.grab_op;
-
-        if (grab !== null && Ecs.entity_eq(grab.entity, this.active)) return;
+        if (this.is_dragged()) return;
 
         callback();
     }

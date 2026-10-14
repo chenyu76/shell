@@ -19,7 +19,7 @@ import * as node from './node.js';
 import * as utils from './utils.js';
 import * as Executor from './executor.js';
 import * as movement from './movement.js';
-import * as add_exception from './dialog_add_exception.js';
+import * as add_rule from './dialog_add_rule.js';
 import * as exec from './executor.js';
 import * as dbus_service from './dbus_service.js';
 import * as scheduler from './scheduler.js';
@@ -156,8 +156,8 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     drag_signal: null | SignalID = null;
 
-    /** If set, the user is currently selecting a window to add to floating exceptions */
-    exception_selecting: boolean = false;
+    /** If set, the user is selecting a window to add a rule for */
+    selecting_rule: null | Config.RuleTarget = null;
 
     /** The number of pixels between windows */
     gap_inner: number = 0;
@@ -525,11 +525,28 @@ export class Ext extends Ecs.System<ExtEvent> {
         ]);
     }
 
-    exception_add(win: Window.ShellWindow) {
-        this.exception_selecting = false;
-        let d = new add_exception.AddExceptionDialog(
+    /** Asks whether the rule is added for the selected window, or for its application */
+    rule_add(win: Window.ShellWindow, target: Config.RuleTarget) {
+        this.selecting_rule = null;
+
+        const pile_title = target === Config.RuleTarget.PileTitle;
+
+        const description = pile_title
+            ? 'Draw the title of the selected window while it is stacked behind another window.'
+            : 'Float the selected window or all windows from the application.';
+
+        // Adding a rule returns to the editor which lists them.
+        const done = () => this.rules_dialog(target);
+
+        const add = (wmclass: string, wm_title: null | string = null) => {
+            this.conf.add_rule(target, wmclass, wm_title);
+            done();
+        };
+
+        let d = new add_rule.AddRuleDialog(
+            description,
             // Cancel
-            () => this.exception_dialog(),
+            () => this.rules_dialog(target),
             // this_app
             () => {
                 let wmclass = win.meta.get_wm_class();
@@ -537,14 +554,12 @@ export class Ext extends Ecs.System<ExtEvent> {
                     wmclass = win.name(this);
                 }
 
-                if (wmclass) this.conf.add_app_exception(wmclass);
-                this.exception_dialog();
+                if (wmclass) add(wmclass);
             },
             // current-window
             () => {
                 let wmclass = win.meta.get_wm_class();
-                if (wmclass) this.conf.add_window_exception(wmclass, win.title());
-                this.exception_dialog();
+                if (wmclass) add(wmclass, win.title());
             },
             // Reload the tiling config on dialog close
             () => {
@@ -555,26 +570,31 @@ export class Ext extends Ecs.System<ExtEvent> {
         d.open();
     }
 
-    exception_dialog() {
+    /** Opens the editor of the window rules, showing the list which the target belongs to */
+    rules_dialog(target: Config.RuleTarget) {
         let path = get_current_path() + '/floating_exceptions/main.js';
 
         const event_handler = (event: string): boolean => {
-            switch (event) {
+            // The event which asks for a window carries the list to add it to.
+            const [name, list] = event.split(' ');
+
+            switch (name) {
                 case 'MODIFIED':
                     this.register_fn(() => {
                         this.conf.reload();
                         this.tiling_config_reapply();
+                        this.restack_stacks();
                     });
                     break;
                 case 'SELECT':
-                    this.register_fn(() => this.exception_select());
+                    this.register_fn(() => this.rule_select(Config.rule_target_from_name(list)));
                     return false;
             }
 
             return true;
         };
 
-        const ipc = utils.async_process_ipc(['gjs', '--module', path]);
+        const ipc = utils.async_process_ipc(['gjs', '--module', path, Config.rule_target_name(target)]);
 
         if (ipc) {
             const generator = (stdout: any, res: any) => {
@@ -594,9 +614,10 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
     }
 
-    exception_select() {
+    /** Lets the user select a window in the overview, to add a rule for it */
+    rule_select(target: Config.RuleTarget) {
         GLib.timeout_add(GLib.PRIORITY_LOW, 500, () => {
-            this.exception_selecting = true;
+            this.selecting_rule = target;
             overview.show();
             return false;
         });
@@ -893,8 +914,8 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         this.size_signals_unblock(win);
 
-        if (this.exception_selecting) {
-            this.exception_add(win);
+        if (this.selecting_rule !== null) {
+            this.rule_add(win, this.selecting_rule);
         }
 
         // Track history of focused windows, but do not permit duplicates.
@@ -1052,8 +1073,8 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
     }
 
-    /** Re-arranges the stacked windows after their offsets were changed */
-    on_stack_offset() {
+    /** Re-arranges every stack, after the settings which shape them changed */
+    restack_stacks() {
         if (!this.auto_tiler) return;
 
         for (const container of this.auto_tiler.forest.stacks.values()) {
@@ -1991,7 +2012,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                     break;
                 case 'stack-offset-x':
                 case 'stack-offset-y':
-                    this.on_stack_offset();
+                    this.restack_stacks();
                     break;
             }
         });

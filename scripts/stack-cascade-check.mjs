@@ -2,11 +2,25 @@
 //
 //     make compile && node scripts/stack-cascade-check.mjs
 //
-// The offsets, sizes and display order of a cascade of stacked windows are
-// verified against the geometry which the shell is given.
+// The offsets, sizes, drawn titles and display order of a cascade of stacked
+// windows are verified against the geometry which the shell is given.
+
+import { register } from 'node:module';
+import { STUB_URL } from './gi-stub-hooks.mjs';
+
+// The Stack imports actors from the shell, which are stubbed before it is loaded.
+register('./gi-stub-hooks.mjs', import.meta.url);
+
+const actors = await import(STUB_URL);
+
 globalThis.global = {
     display: { connect: () => 1, disconnect: () => {}, get_primary_monitor: () => 0 },
     workspace_manager: { get_active_workspace_index: () => 0 },
+    window_group: {
+        add_child: () => {},
+        get_parent: () => null,
+        set_child_above_sibling: () => {},
+    },
 };
 
 const { Stack } = await import('../target/stack.js');
@@ -21,6 +35,7 @@ function make_window(entity, name, rect) {
     const meta = {
         connect: () => 0,
         disconnect: () => {},
+        get_wm_class: () => name,
         raise() {
             state.raises += 1;
         },
@@ -41,6 +56,7 @@ function make_window(entity, name, rect) {
         entity,
         meta,
         state,
+        title: () => name,
         actor_exists: () => true,
         same_workspace: () => true,
         is_maximized: () => false,
@@ -52,10 +68,11 @@ function make_window(entity, name, rect) {
     };
 }
 
-function make_ext(offsets) {
+function make_ext(offsets, titled = new Array()) {
     const windows = new Map();
     return {
         dpi: 1,
+        conf: { window_has_pile_title: (_wclass, title) => titled.includes(title) },
         windows: { get: (e) => windows.get(e[0]) ?? null, _map: windows },
         settings: {
             stack_offset_x: () => offsets[0],
@@ -88,8 +105,11 @@ function add_window(ext, name, area) {
     return window;
 }
 
-function scenario(offsets, area, names) {
-    const ext = make_ext(offsets);
+function scenario(offsets, area, names, titled = new Array()) {
+    // Each check inspects the actors of the stack which it created.
+    actors.reset_actors();
+
+    const ext = make_ext(offsets, titled);
     const windows = names.map((name) => add_window(ext, name, area));
 
     const stack = new Stack(ext, windows[0].entity, 0, 0);
@@ -378,6 +398,120 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     stack.auto_activate();
 
     check('the order of the pile is kept when the stack is rebuilt', order() === arranged, `${arranged} -> ${order()}`);
+}
+
+// --- titles drawn over the pile ------------------------------------------------
+{
+    const labels = () => actors.drawn_actors().filter((actor) => actor.style_class === 'pop-shell-pile-title');
+
+    const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
+
+    stack.active = windows[0].entity;
+    stack.auto_activate();
+
+    const drawn = () => stack.display.slice(0, -1).map((entity) => name_of(windows, entity)).sort();
+
+    check(
+        'the title of every window behind is drawn',
+        labels().map((label) => label.text).sort().join(',') === drawn().join(','),
+        labels().map((label) => label.text).join(','),
+    );
+
+    const front = name_of(windows, stack.display[stack.display.length - 1]);
+    check('the title of the window in front is not drawn', !labels().some((label) => label.text === front));
+
+    check('a drawn title is centered in the exposed part of its title bar', (() => {
+        const behind = name_of(windows, stack.display[0]);
+        const label = labels().find((label) => label.text === behind);
+        const rect = windows.find((window) => window.name === behind).state.rect;
+
+        const center_x = label.position.x + label.size.width / 2;
+        const center_y = label.position.y + label.size.height / 2;
+
+        return (
+            Math.abs(center_x - (rect.x + rect.width / 2)) <= 0.5 &&
+            Math.abs(center_y - (rect.y + 32 / 2)) <= 0.5 &&
+            label.size.height === 16
+        );
+    })());
+
+    check('a drawn title is centered within its label as well', (() => {
+        const label = labels()[0];
+        return label.clutter_text.x_align === 1 && label.clutter_text.y_align === 1;
+    })());
+
+    check('a drawn title is stacked above the windows of the stack', (() => {
+        const container = labels()[0]?.get_parent();
+        return container !== undefined && container.visible;
+    })());
+
+    check('the titles follow the pile when it is rotated', (() => {
+        stack.cycle(true);
+        const rotated = stack.display.slice(0, -1).map((entity) => name_of(windows, entity)).sort();
+        return labels().map((label) => label.text).sort().join(',') === rotated.join(',');
+    })());
+
+    check('a window which is not selected by the rules has no drawn title', (() => {
+        const untitled = scenario([32, 32], AREA, ['a', 'b', 'c'], ['b']);
+        untitled.stack.active = untitled.windows[0].entity;
+        untitled.stack.auto_activate();
+
+        const texts = labels().map((label) => label.text);
+        return texts.length === 1 && texts[0] === 'b';
+    })());
+
+    check('the titles are hidden once the stack may not be displayed', (() => {
+        const hidden = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b']);
+        hidden.stack.active = hidden.windows[0].entity;
+        hidden.stack.auto_activate();
+        hidden.stack.set_visible(false);
+
+        return labels().length === 0;
+    })());
+
+    check('a band which is too small to hold a title is left empty', (() => {
+        const thin = scenario([32, 8], AREA, ['a', 'b', 'c'], ['a', 'b']);
+        thin.stack.active = thin.windows[0].entity;
+        thin.stack.auto_activate();
+
+        return labels().length === 0;
+    })());
+
+    check('a window which leaves the stack loses its drawn title', (() => {
+        const leaving = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
+        leaving.stack.active = leaving.windows[0].entity;
+        leaving.stack.auto_activate();
+
+        // The window which is displayed behind the one in front leaves the stack.
+        const entity = leaving.stack.display[0];
+        const name = name_of(leaving.windows, entity);
+
+        leaving.stack.remove(entity);
+
+        return labels().length === 1 && !labels().some((label) => label.text === name);
+    })());
+
+    check('a window which a rebuild drops loses its drawn title', (() => {
+        const rebuilt = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
+        rebuilt.stack.active = rebuilt.windows[0].entity;
+        rebuilt.stack.auto_activate();
+
+        const dropped = name_of(rebuilt.windows, rebuilt.stack.display[0]);
+        const kept = rebuilt.windows.filter((window) => window.name !== dropped);
+
+        rebuilt.stack.set_entities(kept.map((window) => window.entity));
+
+        return !labels().some((label) => label.text === dropped);
+    })());
+
+    check('the titles are removed with the stack', (() => {
+        const removed = scenario([32, 32], AREA, ['a', 'b'], ['a', 'b']);
+        removed.stack.active = removed.windows[0].entity;
+        removed.stack.auto_activate();
+        removed.stack.destroy();
+
+        return labels().length === 0;
+    })());
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
