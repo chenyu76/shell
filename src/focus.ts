@@ -12,34 +12,39 @@ export enum FocusPosition {
 }
 
 export class FocusSelector {
+    /** Selects the closest window in a direction, ignoring the windows which the filter rejects */
     select(
         ext: Ext,
         direction: (a: ShellWindow, b: Array<ShellWindow>) => Array<ShellWindow>,
         window: ShellWindow | null,
+        filter?: (window: ShellWindow) => boolean,
     ): ShellWindow | null {
         window = window ?? ext.focus_window();
         if (window) {
             let window_list = ext.active_window_list();
+
+            if (filter) window_list = window_list.filter(filter);
+
             return select(direction, window, window_list);
         }
 
         return null;
     }
 
-    down(ext: Ext, window: ShellWindow | null): ShellWindow | null {
-        return this.select(ext, window_down, window);
+    down(ext: Ext, window: ShellWindow | null, filter?: (window: ShellWindow) => boolean): ShellWindow | null {
+        return this.select(ext, window_down, window, filter);
     }
 
-    left(ext: Ext, window: ShellWindow | null): ShellWindow | null {
-        return this.select(ext, window_left, window);
+    left(ext: Ext, window: ShellWindow | null, filter?: (window: ShellWindow) => boolean): ShellWindow | null {
+        return this.select(ext, window_left, window, filter);
     }
 
-    right(ext: Ext, window: ShellWindow | null): ShellWindow | null {
-        return this.select(ext, window_right, window);
+    right(ext: Ext, window: ShellWindow | null, filter?: (window: ShellWindow) => boolean): ShellWindow | null {
+        return this.select(ext, window_right, window, filter);
     }
 
-    up(ext: Ext, window: ShellWindow | null): ShellWindow | null {
-        return this.select(ext, window_up, window);
+    up(ext: Ext, window: ShellWindow | null, filter?: (window: ShellWindow) => boolean): ShellWindow | null {
+        return this.select(ext, window_up, window, filter);
     }
 }
 

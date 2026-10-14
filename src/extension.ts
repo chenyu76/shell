@@ -19,7 +19,6 @@ import * as node from './node.js';
 import * as utils from './utils.js';
 import * as Executor from './executor.js';
 import * as movement from './movement.js';
-import * as stack from './stack.js';
 import * as add_exception from './dialog_add_exception.js';
 import * as exec from './executor.js';
 import * as dbus_service from './dbus_service.js';
@@ -650,67 +649,73 @@ export class Ext extends Ecs.System<ExtEvent> {
     }
 
     focus_left() {
-        this.stack_select(
-            (id, stack) => (id === 0 ? null : stack.tabs[id - 1].entity),
-            () => this.activate_window(this.focus_selector.left(this, null)),
-        );
+        this.stack_cycle(false, (filter) => this.focus_selector.left(this, null, filter));
     }
 
     focus_right() {
-        this.stack_select(
-            (id, stack) => (stack.tabs.length > id + 1 ? stack.tabs[id + 1].entity : null),
-            () => this.activate_window(this.focus_selector.right(this, null)),
-        );
+        this.stack_cycle(true, (filter) => this.focus_selector.right(this, null, filter));
     }
 
     focus_down() {
-        this.activate_window(this.focus_selector.down(this, null));
+        this.stack_cycle(true, (filter) => this.focus_selector.down(this, null, filter));
     }
 
     focus_up() {
-        this.activate_window(this.focus_selector.up(this, null));
+        this.stack_cycle(false, (filter) => this.focus_selector.up(this, null, filter));
     }
 
     focus_window(): Window.ShellWindow | null {
         return this.get_window(display.get_focus_window());
     }
 
-    stack_select(select: (id: number, stack: stack.Stack) => Entity | null, focus_shift: () => void) {
-        const switched = this.stack_switch((stack: any) => {
-            if (!stack) return false;
+    /** Cycles through the stack which the focused window belongs to
+     *
+     * Every window of the stack takes its turn in front of the others, and the
+     * pile is rotated by each press. Once the whole stack has been displayed in
+     * front, focus is shifted out of the stack in the direction which was
+     * pressed, skipping the stack's other windows. When the focused window is
+     * not part of a stack, focus is shifted immediately.
+     */
+    stack_cycle(
+        forward: boolean,
+        selector: (filter?: (window: Window.ShellWindow) => boolean) => Window.ShellWindow | null,
+    ) {
+        const focused = this.focus_window();
+        const found = focused === null ? null : this.auto_tiler?.find_stack(focused.entity) ?? null;
+        const stack = found === null ? null : (found[1].inner as node.NodeStack);
+        const container = stack === null ? null : this.auto_tiler?.forest.stacks.get(stack.idx) ?? null;
 
-            const stack_con = this.auto_tiler?.forest.stacks.get(stack.idx);
-            if (stack_con) {
-                const id = stack_con.active_id;
-                if (id !== -1) {
-                    const next = select(id, stack_con);
-                    if (next) {
-                        stack_con.activate(next);
-                        const window = this.windows.get(next);
-                        if (window) {
-                            window.activate();
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            return false;
-        });
-
-        if (!switched) {
-            focus_shift();
+        if (stack === null || container === null) {
+            this.activate_window(selector());
+            return;
         }
-    }
 
-    stack_switch(apply: (stack: node.NodeStack) => boolean) {
-        const window = this.focus_window();
-        if (window) {
-            if (this.auto_tiler) {
-                const node = this.auto_tiler.find_stack(window.entity);
-                return node ? apply(node[1].inner as node.NodeStack) : false;
-            }
+        const idx = stack.idx;
+
+        /** Displays the next window of the stack in front, if it may be cycled */
+        const cycle = () => {
+            const entity = container.cycle(forward);
+            const window = entity === null ? null : this.windows.get(entity);
+
+            if (window) window.activate();
+            return window !== null;
+        };
+
+        if (cycle()) return;
+
+        // Every window of the stack has been displayed in front of the others,
+        // so focus is shifted out of the stack in the pressed direction.
+        const target = selector((window) => window.stack !== idx);
+
+        if (target) {
+            this.activate_window(target);
+            return;
         }
+
+        // There is no window in that direction, so the stack is cycled again
+        // instead of wasting the key press.
+        container.reset_cycle();
+        cycle();
     }
 
     /// Fetches the window component from the entity associated with the metacity window metadata.
@@ -886,9 +891,22 @@ export class Ext extends Ecs.System<ExtEvent> {
             this.prev_focused[1] = win.entity;
         }
 
-        // Update the active tab in the stack.
+        // Display the focused window in front of the stack which it belongs to.
         if (null !== this.auto_tiler && null !== win.stack) {
-            ext?.auto_tiler?.forest.stacks.get(win.stack)?.activate(win.entity);
+            const container = this.auto_tiler.forest.stacks.get(win.stack);
+
+            if (container) {
+                // Focus entered the stack from another window, so the direction
+                // keys may cycle through the whole stack again.
+                const previous = this.prev_focused[0];
+                const previous_window = previous === null ? null : this.windows.get(previous);
+
+                if (!previous_window || previous_window.stack !== win.stack) {
+                    container.reset_cycle();
+                }
+
+                container.activate(win.entity);
+            }
         }
 
         this.unmaximize_workspace(win);
@@ -1008,6 +1026,15 @@ export class Ext extends Ecs.System<ExtEvent> {
             }
         } else {
             this.update_snapped();
+        }
+    }
+
+    /** Re-arranges the stacked windows after their offsets were changed */
+    on_stack_offset() {
+        if (!this.auto_tiler) return;
+
+        for (const container of this.auto_tiler.forest.stacks.values()) {
+            container.restack();
         }
     }
 
@@ -1158,9 +1185,17 @@ export class Ext extends Ecs.System<ExtEvent> {
                     const fork = forest.forks.get(fork_entity);
                     if (fork) {
                         if (win.stack) {
-                            const tab_dimension = this.dpi * stack.TAB_HEIGHT;
-                            crect.height += tab_dimension;
-                            crect.y -= tab_dimension;
+                            // The fork is resized by the area which the stack
+                            // occupies, which the frame of the window in front is
+                            // expanded to.
+                            const container = forest.stacks.get(win.stack);
+                            if (container) {
+                                const area = container.area_from_window(crect);
+                                crect.x = area.x;
+                                crect.y = area.y;
+                                crect.width = area.width;
+                                crect.height = area.height;
+                            }
                         }
 
                         let top_level = forest.find_toplevel(this.workspace_id());
@@ -1930,6 +1965,11 @@ export class Ext extends Ecs.System<ExtEvent> {
                     } else {
                         _hide_skip_taskbar_windows();
                     }
+                    break;
+                case 'stack-offset-x':
+                case 'stack-offset-y':
+                    this.on_stack_offset();
+                    break;
             }
         });
 

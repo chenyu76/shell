@@ -3,723 +3,468 @@ import type { Ext } from './extension.js';
 import type { ShellWindow } from './window.js';
 
 import * as Ecs from './ecs.js';
-import * as a from './arena.js';
-import * as utils from './utils.js';
 
-const Arena = a.Arena;
-import Clutter from 'gi://Clutter';
-import GObject from 'gi://GObject';
-import St from 'gi://St';
+/** The smallest portion of a stack's area which its windows may be reduced to. */
+const MIN_STACK_FRACTION = 0.5;
 
-const ACTIVE_TAB = 'pop-shell-tab pop-shell-tab-active';
-const INACTIVE_TAB = 'pop-shell-tab pop-shell-tab-inactive';
-const URGENT_TAB = 'pop-shell-tab pop-shell-tab-urgent';
-const INACTIVE_TAB_STYLE = '#9B8E8A';
+/** The smallest size in pixels which a window of a stack may be reduced to. */
+const MIN_WINDOW_SIZE = 64;
 
-export var TAB_HEIGHT: number = 24;
-
-interface Tab {
-    active: boolean;
-    entity: Entity;
-    button: number;
-    button_signal: SignalID | null;
-    signals: Array<SignalID>;
+function contains(entities: Array<Entity>, entity: Entity): boolean {
+    return entities.some((compare) => Ecs.entity_eq(compare, entity));
 }
 
-interface StackWidgets {
-    tabs: St.Widget;
+/** Limits an offset so that the windows of a stack do not shrink below the minimums above. */
+function clamp_offset(offset: number, length: number, count: number): number {
+    if (count < 2) return 0;
+
+    const minimum = Math.max(MIN_WINDOW_SIZE, length * MIN_STACK_FRACTION);
+    const maximum = Math.max(0, (length - minimum) / (count - 1));
+
+    return Math.max(0, Math.min(offset, maximum));
 }
 
-function stack_widgets_new(): StackWidgets {
-    let tabs = new St.BoxLayout({
-        style_class: 'pop-shell-stack',
-        x_expand: true,
-    });
-
-    tabs.get_layout_manager()?.set_homogeneous(true);
-
-    return { tabs };
-}
-
-const ContainerButton = GObject.registerClass(
-    {
-        Signals: { activate: {} },
-    },
-    class ImageButton extends St.Button {
-        _init(icon: St.Icon) {
-            super._init({
-                child: icon,
-                x_expand: true,
-                y_expand: true,
-            });
-        }
-    },
-);
-
-interface TabButton extends St.Button {
-    set_title: (title: string) => void;
-}
-
-const TabButton = GObject.registerClass(
-    {
-        Signals: { activate: {} },
-    },
-    class TabButton extends St.Button {
-        _init(window: ShellWindow) {
-            const icon = window.icon(window.ext, 24);
-            icon.set_x_align(Clutter.ActorAlign.START);
-
-            const label = new St.Label({
-                y_expand: true,
-                x_align: Clutter.ActorAlign.START,
-                y_align: Clutter.ActorAlign.CENTER,
-                style: 'padding-left: 8px',
-            });
-
-            label.text = window.title();
-
-            const container = new St.BoxLayout({
-                y_expand: true,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-
-            const close_button = new ContainerButton(
-                new St.Icon({
-                    icon_name: 'window-close-symbolic',
-                    icon_size: 24,
-                    y_align: Clutter.ActorAlign.CENTER,
-                }),
-            );
-
-            close_button.connect('clicked', () => {
-                window.meta.delete(global.get_current_time());
-            });
-
-            close_button.set_x_align(Clutter.ActorAlign.END);
-            close_button.set_y_align(Clutter.ActorAlign.CENTER);
-
-            container.add_child(icon);
-            container.add_child(label);
-            container.add_child(close_button);
-
-            super._init({
-                child: container,
-                x_expand: true,
-                y_expand: true,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-
-            this._title = label;
-        }
-
-        set_title(text: string) {
-            if (this._title) {
-                this._title.text = text;
-            }
-        }
-    },
-);
-
+/** A stack of windows which are displayed as a cascading pile
+ *
+ * Every window of a stack has the same size, and each window is translated
+ * further to the bottom-right than the window behind it. This keeps the title
+ * bar and the left edge of every window which is not displayed in front visible.
+ *
+ * The window which has the focus is displayed in front, where it is completely
+ * visible. Displaying another window swaps its place with the window in front,
+ * whereas the direction keys rotate the pile, displaying every window in turn.
+ */
 export class Stack {
     ext: Ext;
 
-    widgets: null | StackWidgets = null;
-
+    /** The window which is displayed in front of the others */
     active: Entity;
 
+    /** The position of the active window in `entities` */
     active_id: number = 0;
 
-    prev_active: null | Entity = null;
-    prev_active_id: number = 0;
+    /** The windows of this stack, in the order which they are navigated in */
+    entities: Array<Entity> = new Array();
 
-    tabs: Array<Tab> = new Array();
+    /** The windows of this stack in the order which they are displayed in, from the back to the front */
+    display: Array<Entity> = new Array();
 
     monitor: number;
 
     workspace: number;
 
-    buttons: a.Arena<TabButton> = new Arena();
+    /** The area which the windows of this stack are arranged within */
+    private rect: Rectangular = { width: 0, height: 0, x: 0, y: 0 };
 
-    tabs_height: number = TAB_HEIGHT;
+    /** Whether the windows may be displayed, disabled while one of them is fullscreen */
+    private visible: boolean = true;
 
-    stack_rect: Rectangular = { width: 0, height: 0, x: 0, y: 0 };
+    /** Prevents a re-entrant arrangement, which raising a window may trigger */
+    private arranging: boolean = false;
+
+    /** Whether the windows must be raised, in order to match the display order */
+    private reorder: boolean = true;
+
+    /** How often the pile was rotated in a row, and in which direction */
+    private cycled: number = 0;
+    private cycled_forward: boolean = true;
+
+    /** The offsets which the current arrangement was computed with */
+    private offsets_used: [number, number] = [0, 0];
 
     private active_signals: [SignalID, SignalID] | null = null;
 
-    private rect: Rectangular = { width: 0, height: 0, x: 0, y: 0 };
-
     private restacker: SignalID = global.display.connect('restacked', () => this.restack());
-
-    private tabs_destroy: SignalID;
 
     constructor(ext: Ext, active: Entity, workspace: number, monitor: number) {
         this.ext = ext;
         this.active = active;
         this.monitor = monitor;
         this.workspace = workspace;
-        this.tabs_height = TAB_HEIGHT * this.ext.dpi;
-
-        this.widgets = stack_widgets_new();
-
-        global.window_group.add_child(this.widgets.tabs);
-
-        this.reposition();
-
-        this.tabs_destroy = this.widgets.tabs.connect('destroy', () => this.recreate_widgets());
     }
 
-    /** Adds a new window to the stack */
-    add(window: ShellWindow) {
-        if (!this.widgets) return;
-
-        const entity = window.entity;
-        const active = Ecs.entity_eq(entity, this.active);
-
-        const button = new TabButton(window);
-        const id = this.buttons.insert(button);
-
-        let tab: Tab = { active, entity, signals: [], button: id, button_signal: null };
-        let comp = this.tabs.length;
-        this.bind_hint_events(tab);
-        this.tabs.push(tab);
-        this.watch_signals(comp, id, window);
-        this.widgets.tabs.add_child(button);
-    }
-
-    /** Activates a tab based on the previously active entry */
-    auto_activate(): null | Entity {
-        if (this.tabs.length === 0) return null;
-
-        if (this.tabs.length <= this.active_id) {
-            this.active_id = this.tabs.length - 1;
-        }
-
-        const c = this.tabs[this.active_id];
-
-        this.activate(c.entity);
-        return c.entity;
-    }
-
-    activate_prev() {
-        if (this.prev_active) {
-            this.activate(this.prev_active);
-        }
-    }
-
-    /** Activates the tab of this entity */
-    activate(entity: Entity) {
-        const permitted = this.permitted_to_show();
-
-        if (this.widgets) this.widgets.tabs.visible = permitted;
-
-        this.reset_visibility(permitted);
-
-        const win = this.ext.windows.get(entity);
-        if (!win) return;
-
-        if (!Ecs.entity_eq(entity, this.active)) {
-            this.prev_active = this.active;
-            this.prev_active_id = this.active_id;
-        }
-
-        this.active_connect(win.meta, entity);
-
-        let id = 0;
-
-        for (const [idx, component] of this.tabs.entries()) {
-            let name;
-
-            this.window_exec(id, component.entity, (window) => {
-                const actor = window.meta.get_compositor_private();
-
-                if (Ecs.entity_eq(entity, component.entity)) {
-                    this.active_id = id;
-                    component.active = true;
-                    name = ACTIVE_TAB;
-                    if (actor) actor.show();
-                } else {
-                    component.active = false;
-                    name = INACTIVE_TAB;
-                    if (actor) actor.hide();
-                }
-
-                let button = this.buttons.get(component.button);
-                if (button) {
-                    button.set_style_class_name(name);
-                    let tab_color = '';
-                    if (component.active) {
-                        let settings = this.ext.settings;
-                        let color_value = settings.hint_color_rgba();
-                        tab_color = `${color_value}; color: ${utils.is_dark(color_value) ? 'white' : 'black'}`;
-                    } else {
-                        tab_color = `${INACTIVE_TAB_STYLE}`;
-                    }
-
-                    const tab_border_radius = this.get_tab_border_radius(idx);
-                    button.set_style(`background: ${tab_color}; border-radius: ${tab_border_radius};`);
-                }
-            });
-
-            id += 1;
-        }
-
-        this.reset_visibility(permitted);
-    }
-
-    // returns the tab button border radius based on it's order.
-    // Only curving the corners on the edges.
-    private get_tab_border_radius(idx: Number): string {
-        let result = `0px 0px 0px 0px`;
-
-        // the minus 4px is to accomodate the inner radius being tighter
-        let radius = Math.max(0, this.ext.settings.active_hint_border_radius() - 4);
-        // only allow a radius up to half the tab_height
-        radius = Math.min(radius, Math.trunc(this.tabs_height / 2));
-        // set each corner's radius based on it's order
-        if (this.tabs.length === 1) result = `${radius}px`;
-        else if (idx === 0) result = `${radius}px 0px 0px ${radius}px`;
-        else if (idx === this.tabs.length - 1) result = `0px ${radius}px ${radius}px 0px`;
-
-        return result;
-    }
-
-    /** Connects `on_window_changed` callbacks to the newly-active window */
-    private active_connect(window: Meta.Window, active: Entity) {
-        // Disconnect before attaching new window as active window
+    /** Sets the windows which are in this stack
+     *
+     * The order in which the windows are displayed is kept, and windows which
+     * joined the stack are displayed in front of the others.
+     */
+    set_entities(entities: Array<Entity>) {
         this.active_disconnect();
 
-        // Memorize them for future calls
-        this.active = active;
+        this.entities = entities.slice();
 
-        this.active_reconnect(window);
+        this.display = this.display.filter((entity) => contains(this.entities, entity));
+
+        for (const entity of this.entities) {
+            if (!contains(this.display, entity)) this.display.push(entity);
+        }
+
+        this.reorder = true;
     }
 
-    private active_reconnect(window: Meta.Window) {
-        // Attach this callback on both signals of the window
-        const on_window_changed = () =>
+    /** Displays a window of the stack in front of the others
+     *
+     * `cycled` is set while the direction keys rotate the stack, which continues
+     * the current cycle instead of starting a new one.
+     */
+    activate(entity: Entity, cycled: boolean = false) {
+        if (this.arranging) return;
+
+        const window = this.ext.windows.get(entity);
+        if (!window) return;
+
+        // Another window is displayed in front by other means than the direction
+        // keys, so the whole stack may be cycled again.
+        if (!cycled && !Ecs.entity_eq(entity, this.active)) {
+            this.reset_cycle();
+        }
+
+        const id = this.entities.findIndex((compare) => Ecs.entity_eq(compare, entity));
+        if (id !== -1) this.active_id = id;
+
+        const permitted = this.permitted_to_show();
+
+        this.active_connect(window.meta, entity);
+        this.promote(entity);
+        this.reset_visibility(permitted);
+        this.arrange();
+    }
+
+    /** Displays the active window in front of the others
+     *
+     * This is called after the windows of the stack were set, and falls back to
+     * the last window when the active one left the stack.
+     */
+    auto_activate(): null | Entity {
+        if (this.entities.length === 0) return null;
+
+        if (this.entities.length <= this.active_id) {
+            this.active_id = this.entities.length - 1;
+        }
+
+        const entity = this.entities[this.active_id];
+
+        this.activate(entity);
+        return entity;
+    }
+
+    /** Displays the next window of the stack in front of the others
+     *
+     * The pile is rotated, so that every window takes its turn in front of the
+     * others. Cycling forwards displays the window which is directly behind the
+     * window in front, and moves the window in front to the back of the pile,
+     * whereas cycling backwards undoes a cycle.
+     *
+     * Returns null when the stack holds fewer than two windows, or once the whole
+     * stack has been displayed in front, which means that focus may be shifted
+     * out of the stack instead.
+     */
+    cycle(forward: boolean): null | Entity {
+        const count = this.display.length;
+
+        if (this.arranging || count < 2) return null;
+
+        if (forward === this.cycled_forward) {
+            if (this.cycled >= count - 1) return null;
+
+            this.cycled += 1;
+        } else {
+            // Cycling backwards undoes one of the rotations which were made in the
+            // other direction.
+            this.cycled_forward = forward;
+            this.cycled = Math.max(0, this.cycled - 1);
+        }
+
+        if (forward) {
+            this.display.unshift(this.display.pop() as Entity);
+        } else {
+            this.display.push(this.display.shift() as Entity);
+        }
+
+        this.reorder = true;
+
+        const entity = this.display[count - 1];
+
+        this.activate(entity, true);
+        return entity;
+    }
+
+    /** Allows the direction keys to cycle through the whole stack once more */
+    reset_cycle() {
+        this.cycled = 0;
+        this.cycled_forward = true;
+    }
+
+    /** Removes a window from the stack, returning the position which it had */
+    remove(entity: Entity): null | number {
+        const idx = this.entities.findIndex((compare) => Ecs.entity_eq(compare, entity));
+        if (idx === -1) return null;
+
+        this.entities.splice(idx, 1);
+        this.display = this.display.filter((compare) => !Ecs.entity_eq(compare, entity));
+
+        if (this.active_id > idx) this.active_id -= 1;
+
+        // The window is no longer hidden behind the others.
+        const window = this.ext.windows.get(entity);
+
+        if (window && this.workspace === this.ext.active_workspace()) {
+            window.meta.get_compositor_private()?.show();
+        }
+
+        return idx;
+    }
+
+    /** Replaces the window which is displayed in front with another window */
+    replace(window: ShellWindow) {
+        const previous = this.entities[this.active_id];
+        if (!previous || !window.meta.get_compositor_private()) return;
+
+        const replace = (entity: Entity) => (Ecs.entity_eq(entity, previous) ? window.entity : entity);
+
+        this.entities = this.entities.map(replace);
+        this.display = this.display.map(replace);
+
+        this.activate(window.entity);
+    }
+
+    /** Disconnects this stack, and displays its windows again */
+    destroy() {
+        global.display.disconnect(this.restacker);
+        this.active_disconnect();
+
+        for (const entity of this.entities.splice(0)) {
+            const window = this.ext.windows.get(entity);
+            if (!window) continue;
+
+            if (this.workspace === this.ext.active_workspace()) {
+                window.meta.get_compositor_private()?.show();
+                window.stack = null;
+            }
+        }
+
+        this.display = new Array();
+    }
+
+    /** Disconnects the change handlers of a window which is leaving the stack */
+    deactivate(w: ShellWindow) {
+        if (Ecs.entity_eq(this.active, w.entity)) this.active_disconnect();
+    }
+
+    /** The area which this stack occupies, given the frame rect of the window in front
+     *
+     * The arrangement is inverted with the offsets which it was last computed
+     * with, which lets a stack be resized by the frame of its window in front.
+     */
+    area_from_window(rect: Rectangular): Rectangular {
+        const count = this.entities.length;
+        if (count < 2) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+
+        const [dx, dy] = this.offsets_used;
+
+        return {
+            x: rect.x - (count - 1) * dx,
+            y: rect.y - (count - 1) * dy,
+            width: rect.width + (count - 1) * dx,
+            height: rect.height + (count - 1) * dy,
+        };
+    }
+
+    /** Sets the area which the windows of this stack are arranged within */
+    set_area(rect: Rectangular) {
+        this.rect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        this.arrange();
+    }
+
+    /** Displays every window of the stack, or hides it when it may not be shown */
+    reset_visibility(permitted: boolean) {
+        for (const entity of this.entities) {
+            const actor = this.ext.windows.get(entity)?.meta.get_compositor_private() ?? null;
+            if (!actor) continue;
+
+            if (permitted && (this.visible || Ecs.entity_eq(entity, this.active))) {
+                actor.show();
+            } else {
+                actor.hide();
+            }
+        }
+    }
+
+    /** Whether the windows of this stack may be displayed on the active workspace */
+    permitted_to_show(): boolean {
+        const workspace = global.workspace_manager.get_active_workspace_index();
+        const primary = global.display.get_primary_monitor();
+        const only_primary = this.ext.settings.workspaces_only_on_primary();
+
+        return workspace === this.workspace || (only_primary && this.monitor != primary);
+    }
+
+    /** Re-arranges the stack, and updates the visibility of its windows */
+    restack() {
+        this.on_grab(() => {
+            const permitted = this.permitted_to_show();
+
+            this.reset_visibility(permitted);
+
+            if (permitted) this.arrange();
+        });
+    }
+
+    /** Sets whether the windows may be displayed, which fullscreen windows disable */
+    set_visible(visible: boolean) {
+        this.visible = visible;
+        this.reset_visibility(this.permitted_to_show());
+    }
+
+    /** Displays a window in front of the others, swapping it with the window in front */
+    private promote(entity: Entity) {
+        const front = this.display.length - 1;
+        const current = this.display.findIndex((compare) => Ecs.entity_eq(compare, entity));
+
+        if (current === -1 || current === front) return;
+
+        this.display[current] = this.display[front];
+        this.display[front] = entity;
+        this.reorder = true;
+    }
+
+    /** The offsets which separate each window of the pile from the window behind it
+     *
+     * The offsets are limited, so that the entire pile remains within the area
+     * which the stack occupies.
+     */
+    private offsets(area: Rectangular, count: number): [number, number] {
+        const { settings, dpi } = this.ext;
+
+        return [
+            clamp_offset(settings.stack_offset_x() * dpi, area.width, count),
+            clamp_offset(settings.stack_offset_y() * dpi, area.height, count),
+        ];
+    }
+
+    /** Computes the geometry of every window of the pile */
+    private window_rects(): Array<Rectangular> {
+        const count = this.display.length;
+        const { x, y, width, height } = this.rect;
+        const rects: Array<Rectangular> = new Array(count);
+
+        if (count === 0) return rects;
+
+        if (count === 1) {
+            rects[0] = { x, y, width, height };
+            return rects;
+        }
+
+        const [dx, dy] = this.offsets(this.rect, count);
+
+        this.offsets_used = [Math.round(dx), Math.round(dy)];
+
+        const w = Math.round(width - (count - 1) * dx);
+        const h = Math.round(height - (count - 1) * dy);
+
+        for (let i = 0; i < count; i += 1) {
+            rects[i] = { x: Math.round(x + i * dx), y: Math.round(y + i * dy), width: w, height: h };
+        }
+
+        return rects;
+    }
+
+    /** Moves the windows of the stack into their cascaded positions */
+    private arrange() {
+        if (this.arranging || this.display.length === 0) return;
+        if (this.rect.width <= 0 || this.rect.height <= 0) return;
+
+        this.arranging = true;
+
+        try {
+            const rects = this.window_rects();
+            const windows = this.display.map((entity) => this.ext.windows.get(entity));
+
+            for (const [idx, window] of windows.entries()) {
+                if (window && window.actor_exists()) this.move_window(window, rects[idx]);
+            }
+
+            if (this.reorder) {
+                this.reorder = false;
+
+                // Raise the windows from the back to the front, so that they are
+                // stacked in the same order as they are displayed in.
+                for (const window of windows) {
+                    if (window && window.actor_exists()) window.meta.raise();
+                }
+            }
+        } finally {
+            this.arranging = false;
+        }
+    }
+
+    private move_window(window: ShellWindow, rect: Rectangular) {
+        const current = window.rect();
+
+        if (
+            current.x === rect.x &&
+            current.y === rect.y &&
+            current.width === rect.width &&
+            current.height === rect.height
+        ) {
+            return;
+        }
+
+        // A window which is maximized on another workspace refuses to move, which
+        // would otherwise leave its size signals blocked.
+        if (!window.same_workspace() && window.is_maximized()) return;
+
+        const ext = this.ext;
+
+        ext.size_signals_block(window);
+        window.move(ext, rect, () => {
+            // Keep the tiling overlay in sync with the window which is being moved.
+            if (ext.tiler.window !== null && Ecs.entity_eq(ext.tiler.window, window.entity)) {
+                ext.set_overlay(window.rect());
+            }
+
+            ext.size_signals_unblock(window);
+        });
+    }
+
+    /** Connects the change handlers to a window which is displayed in front */
+    private active_connect(window: Meta.Window, active: Entity) {
+        this.active_disconnect();
+
+        this.active = active;
+
+        const update_border = () =>
             this.on_grab(() => {
-                const window = this.ext.windows.get(this.active);
-                if (window) {
-                    this.update_positions(window.meta.get_frame_rect());
-                    this.window_changed();
+                if (this.ext.windows.get(this.active)) {
+                    this.ext.show_border_on_focused();
                 } else {
                     this.active_disconnect();
                 }
             });
 
         this.active_signals = [
-            window.connect('size-changed', on_window_changed),
-            window.connect('position-changed', on_window_changed),
+            window.connect('size-changed', update_border),
+            window.connect('position-changed', update_border),
         ];
     }
 
-    /** Disconnects signals from the active window in the stack */
+    /** Disconnects the change handlers of the active window */
     private active_disconnect() {
-        const active_meta = this.active_meta();
+        const window = this.ext.windows.get(this.active);
 
-        if (this.active_signals && active_meta) {
-            for (const s of this.active_signals) active_meta.disconnect(s);
+        if (this.active_signals && window) {
+            for (const signal of this.active_signals) window.meta.disconnect(signal);
         }
 
         this.active_signals = null;
     }
 
-    private active_meta(): Meta.Window | undefined {
-        return this.ext.windows.get(this.active)?.meta;
-    }
+    /** Runs the callback, unless a window of this stack is being dragged */
+    private on_grab(callback: () => void) {
+        const grab = this.ext.grab_op;
 
-    private bind_hint_events(tab: Tab) {
-        let settings = this.ext.settings;
-        let button = this.buttons.get(tab.button);
-        if (button) {
-            let change_id = settings.ext.connect('changed', (_, key) => {
-                if (key === 'hint-color-rgba') {
-                    this.change_tab_color(tab);
-                }
-                return false;
-            });
-            button.connect('destroy', () => {
-                settings.ext.disconnect(change_id);
-            });
-        }
-        this.change_tab_color(tab);
-    }
+        if (grab !== null && Ecs.entity_eq(grab.entity, this.active)) return;
 
-    private change_tab_color(tab: Tab) {
-        let settings = this.ext.settings;
-        let button = this.buttons.get(tab.button);
-        if (button) {
-            let tab_color = '';
-            if (Ecs.entity_eq(tab.entity, this.active)) {
-                let color_value = settings.hint_color_rgba();
-                tab_color = `background: ${color_value}; color: ${utils.is_dark(color_value) ? 'white' : 'black'}`;
-            } else {
-                tab_color = `background: ${INACTIVE_TAB_STYLE}`;
-            }
-            button.set_style(tab_color);
-        }
-    }
-
-    /** Clears watched tabs and removes all tabs */
-    clear() {
-        this.active_disconnect();
-        for (const c of this.tabs.splice(0)) this.tab_disconnect(c);
-        this.widgets?.tabs.destroy_all_children();
-        this.buttons.truncate(0);
-    }
-
-    /** Disconnects a tab from the stack */
-    tab_disconnect(c: Tab) {
-        const window = this.ext.windows.get(c.entity);
-        if (window) {
-            for (const s of c.signals) window.meta.disconnect(s);
-            if (this.workspace === this.ext.active_workspace()) window.meta.get_compositor_private()?.show();
-        }
-
-        c.signals = [];
-
-        if (c.button_signal) {
-            const b = this.buttons.get(c.button);
-            if (b) {
-                b.disconnect(c.button_signal);
-                c.button_signal = null;
-            }
-        }
-    }
-
-    /** Deactivate the signals belonging to an entity */
-    deactivate(w: ShellWindow) {
-        for (const c of this.tabs)
-            if (Ecs.entity_eq(c.entity, w.entity)) {
-                this.tab_disconnect(c);
-            }
-
-        if (this.active_signals && Ecs.entity_eq(this.active, w.entity)) {
-            this.active_disconnect();
-        }
-    }
-
-    /** Disconnects this stack's signal, and destroys its widgets */
-    destroy() {
-        global.display.disconnect(this.restacker);
-        this.active_disconnect();
-
-        // Disconnect stack signals from each window, and unhide them.
-        for (const c of this.tabs) {
-            this.tab_disconnect(c);
-            if (this.workspace === this.ext.active_workspace()) {
-                const win = this.ext.windows.get(c.entity);
-                if (win) {
-                    win.meta.get_compositor_private()?.show();
-                    win.stack = null;
-                }
-            }
-        }
-
-        for (const b of this.buttons.values()) {
-            try {
-                b.destroy();
-            } catch (e) {}
-        }
-
-        if (this.widgets) {
-            const tabs = this.widgets.tabs;
-            this.widgets = null;
-            tabs.destroy();
-        }
-    }
-
-    private on_grab(or: () => void) {
-        if (this.ext.grab_op !== null) {
-            if (Ecs.entity_eq(this.ext.grab_op.entity, this.active)) {
-                if (this.widgets) {
-                    const parent = this.widgets.tabs.get_parent();
-                    const actor = this.active_meta()?.get_compositor_private();
-                    if (actor && parent) {
-                        parent.set_child_below_sibling(this.widgets.tabs, actor);
-                    }
-                }
-
-                return;
-            }
-        }
-
-        or();
-    }
-
-    /** Workaround for when GNOME Shell destroys our widgets when they're reparented
-     *  in an active workspace change. */
-    recreate_widgets() {
-        if (this.widgets !== null) {
-            this.widgets.tabs.disconnect(this.tabs_destroy);
-            this.widgets = stack_widgets_new();
-
-            global.window_group.add_child(this.widgets.tabs);
-
-            this.tabs_destroy = this.widgets.tabs.connect('destroy', () => this.recreate_widgets());
-
-            this.active_disconnect();
-
-            for (const c of this.tabs.splice(0)) {
-                this.tab_disconnect(c);
-                const window = this.ext.windows.get(c.entity);
-                if (window) this.add(window);
-            }
-
-            this.update_positions(this.rect);
-            this.restack();
-
-            const window = this.ext.windows.get(this.active);
-            if (!window) return;
-
-            this.active_reconnect(window.meta);
-        }
-    }
-
-    remove_by_pos(idx: number) {
-        const c = this.tabs[idx];
-        if (c) this.remove_tab_component(c, idx);
-    }
-
-    remove_tab_component(c: Tab, idx: number) {
-        if (!this.widgets) return;
-
-        this.tab_disconnect(c);
-
-        const b = this.buttons.get(c.button);
-        if (b) {
-            this.widgets.tabs.remove_child(b);
-            b.destroy();
-            this.buttons.remove(c.button);
-        }
-
-        this.tabs.splice(idx, 1);
-    }
-
-    /** Removes the tab associated with the entity */
-    remove_tab(entity: Entity): null | number {
-        if (!this.widgets) return null;
-
-        if (this.prev_active && Ecs.entity_eq(entity, this.prev_active)) {
-            this.prev_active = null;
-            this.prev_active_id = 0;
-        }
-
-        let idx = 0;
-        for (const c of this.tabs) {
-            if (Ecs.entity_eq(c.entity, entity)) {
-                this.remove_tab_component(c, idx);
-                if (this.active_id > idx) {
-                    this.active_id -= 1;
-                }
-                return idx;
-            }
-            idx += 1;
-        }
-
-        return null;
-    }
-
-    replace(window: ShellWindow) {
-        if (!this.widgets) return;
-        const c = this.tabs[this.active_id],
-            actor = window.meta.get_compositor_private();
-        if (c && actor) {
-            this.tab_disconnect(c);
-
-            if (Ecs.entity_eq(window.entity, this.active)) {
-                this.active_connect(window.meta, window.entity);
-                actor.show();
-            } else {
-                actor.hide();
-            }
-
-            this.watch_signals(this.active_id, c.button, window);
-            this.buttons.get(c.button)?.set_title(window.title());
-            this.activate(window.entity);
-        }
-    }
-
-    /** Repositions the stack, arranging the stack's actors around the active window */
-    reposition() {
-        if (!this.widgets) return;
-
-        const window = this.ext.windows.get(this.active);
-        if (!window) return;
-
-        const actor = window.meta.get_compositor_private();
-        if (!actor) {
-            this.active_disconnect();
-            return;
-        }
-
-        actor.show();
-
-        const parent = actor.get_parent();
-
-        if (!parent) {
-            return;
-        }
-
-        const stack_parent = this.widgets.tabs.get_parent();
-        if (stack_parent) {
-            stack_parent.remove_child(this.widgets.tabs);
-        }
-
-        parent.add_child(this.widgets.tabs);
-
-        // Reposition actors on the screen, being careful about not displaying over maximized windows
-        if (!window.meta.is_fullscreen() && !window.is_maximized() && !this.ext.maximized_on_active_display()) {
-            parent.set_child_above_sibling(this.widgets.tabs, actor);
-        } else {
-            parent.set_child_below_sibling(this.widgets.tabs, actor);
-        }
-    }
-
-    permitted_to_show(workspace?: number): boolean {
-        const active_workspace = workspace ?? global.workspace_manager.get_active_workspace_index();
-        const primary = global.display.get_primary_monitor();
-        const only_primary = this.ext.settings.workspaces_only_on_primary();
-
-        return active_workspace === this.workspace || (only_primary && this.monitor != primary);
-    }
-
-    reset_visibility(permitted: boolean) {
-        let idx = 0;
-
-        for (const c of this.tabs) {
-            this.actor_exec(idx, c.entity, (actor) => {
-                if (permitted && this.active_id === idx) {
-                    actor.show();
-                    return;
-                }
-
-                actor.hide();
-            });
-
-            idx += 1;
-        }
-    }
-
-    /** Repositions the stack, and hides all but the active window in the stack */
-    restack() {
-        this.on_grab(() => {
-            if (!this.widgets) return;
-
-            const permitted = this.permitted_to_show();
-
-            this.widgets.tabs.visible = permitted;
-
-            if (permitted) this.reposition();
-
-            this.reset_visibility(permitted);
-        });
-    }
-
-    /** Changes visibility of the stack's actors */
-    set_visible(visible: boolean) {
-        if (!this.widgets) return;
-
-        this.widgets.tabs.visible = visible;
-
-        if (visible) {
-            this.widgets.tabs.show();
-        } else {
-            this.widgets.tabs.hide();
-        }
-    }
-
-    /** Updates the dimensions and positions of the stack's actors */
-    update_positions(rect: Rectangular) {
-        if (!this.widgets) return;
-
-        this.rect = rect;
-
-        this.tabs_height = TAB_HEIGHT * this.ext.dpi;
-
-        this.stack_rect = {
-            x: rect.x,
-            y: rect.y - this.tabs_height,
-            width: rect.width,
-            height: this.tabs_height + rect.height,
-        };
-
-        this.widgets.tabs.x = rect.x;
-        this.widgets.tabs.y = this.stack_rect.y;
-        this.widgets.tabs.height = this.tabs_height;
-        this.widgets.tabs.width = rect.width;
-    }
-
-    private watch_signals(comp: number, button: number, window: ShellWindow) {
-        const entity = window.entity;
-        const widget = this.buttons.get(button);
-        if (!widget) return;
-
-        const c = this.tabs[comp];
-
-        // Detach button signal if it's still attached
-        if (c.button_signal) widget.disconnect(c.button_signal);
-
-        // Connect tab-clicked signal
-        c.button_signal = widget.connect('clicked', () => {
-            this.activate(entity);
-            this.window_exec(comp, entity, (window) => {
-                const actor = window.meta.get_compositor_private();
-                if (actor) {
-                    actor.show();
-                    window.activate(false);
-
-                    this.reposition();
-
-                    for (const comp of this.tabs) {
-                        this.buttons.get(comp.button)?.set_style_class_name(INACTIVE_TAB);
-                    }
-
-                    widget.set_style_class_name(ACTIVE_TAB);
-                }
-            });
-        });
-
-        // Detach signals if they're still attached
-        if (this.tabs[comp].signals) {
-            for (const c of this.tabs[comp].signals) window.meta.disconnect(c);
-        }
-
-        // Attach new signals
-        this.tabs[comp].signals = [
-            window.meta.connect('notify::title', () => {
-                this.window_exec(comp, entity, (window) => {
-                    this.buttons.get(button)?.set_title(window.title());
-                });
-            }),
-
-            window.meta.connect('notify::urgent', () => {
-                this.window_exec(comp, entity, (window) => {
-                    if (!window.meta.has_focus()) {
-                        this.buttons.get(button)?.set_style_class_name(URGENT_TAB);
-                    }
-                });
-            }),
-        ];
-    }
-
-    private window_changed() {
-        this.ext.show_border_on_focused();
-    }
-
-    private actor_exec(comp: number, entity: Entity, func: (window: Clutter.Actor) => void) {
-        this.window_exec(comp, entity, (window) => {
-            func(window.meta.get_compositor_private() as Clutter.Actor);
-        });
-    }
-
-    private window_exec(comp: number, entity: Entity, func: (window: ShellWindow) => void) {
-        const window = this.ext.windows.get(entity);
-        if (window && window.actor_exists()) {
-            func(window);
-        } else {
-            const tab = this.tabs[comp];
-            if (tab) this.tab_disconnect(tab);
-        }
+        callback();
     }
 }

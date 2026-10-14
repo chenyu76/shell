@@ -17,6 +17,8 @@ interface AppWidgets {
     show_skip_taskbar: any;
     smart_gaps: any;
     snap_to_grid: any;
+    stack_offset_x: any;
+    stack_offset_y: any;
     window_titles: any;
     mouse_cursor_focus_position: any;
     log_level: any;
@@ -123,6 +125,24 @@ function settings_dialog_new(): Gtk.Container {
         }
     });
 
+    app.stack_offset_x.set_text(String(ext.stack_offset_x()));
+    app.stack_offset_x.connect('activate', (widget: any) => {
+        let parsed = parseInt((widget.get_text() as string).trim());
+        if (!isNaN(parsed)) {
+            ext.set_stack_offset_x(parsed);
+            Settings.sync();
+        }
+    });
+
+    app.stack_offset_y.set_text(String(ext.stack_offset_y()));
+    app.stack_offset_y.connect('activate', (widget: any) => {
+        let parsed = parseInt((widget.get_text() as string).trim());
+        if (!isNaN(parsed)) {
+            ext.set_stack_offset_y(parsed);
+            Settings.sync();
+        }
+    });
+
     return grid;
 }
 
@@ -177,11 +197,21 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         xalign: 0.0,
     });
 
-    const [inner_gap, outer_gap] = gaps_section(grid, 9);
+    const [outer_gap, inner_gap] = number_section(grid, 9, 'Gaps (in pixels)', 'Outer', 'Inner');
+
+    const [stack_offset_x, stack_offset_y] = number_section(
+        grid,
+        13,
+        'Stacked Window Offset (in pixels)',
+        'Horizontal',
+        'Vertical',
+    );
 
     const settings = {
         inner_gap,
         outer_gap,
+        stack_offset_x,
+        stack_offset_y,
         fullscreen_launcher: new Gtk.Switch({ halign: Gtk.Align.END }),
         stacking_with_mouse: new Gtk.Switch({ halign: Gtk.Align.END }),
         smart_gaps: new Gtk.Switch({ halign: Gtk.Align.END }),
@@ -221,39 +251,25 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
     return [settings, grid];
 }
 
-function gaps_section(grid: any, top: number): [any, any] {
-    let outer_label = new Gtk.Label({
-        label: 'Outer',
-        xalign: 0.0,
-        margin_start: 24,
-    });
-
-    let outer_entry = number_entry();
-
-    let inner_label = new Gtk.Label({
-        label: 'Inner',
-        xalign: 0.0,
-        margin_start: 24,
-    });
-
-    let inner_entry = number_entry();
-
-    let section_label = new Gtk.Label({
-        label: 'Gaps (in pixels)',
-        xalign: 0.0,
-    });
-
-    grid.attach(section_label, 0, top, 1, 1);
-    grid.attach(outer_label, 0, top + 1, 1, 1);
-    grid.attach(outer_entry, 1, top + 1, 1, 1);
-    grid.attach(inner_label, 0, top + 2, 1, 1);
-    grid.attach(inner_entry, 1, top + 2, 1, 1);
-
-    return [inner_entry, outer_entry];
-}
-
 function number_entry(): Gtk.Widget {
     return new Gtk.Entry({ input_purpose: Gtk.InputPurpose.NUMBER });
+}
+
+/** A titled pair of numeric entries, such as the inner and outer gaps */
+function number_section(grid: any, top: number, title: string, first: string, second: string): [any, any] {
+    const section_label = new Gtk.Label({ label: title, xalign: 0.0 });
+    const first_label = new Gtk.Label({ label: first, xalign: 0.0, margin_start: 24 });
+    const second_label = new Gtk.Label({ label: second, xalign: 0.0, margin_start: 24 });
+    const first_entry = number_entry();
+    const second_entry = number_entry();
+
+    grid.attach(section_label, 0, top, 1, 1);
+    grid.attach(first_label, 0, top + 1, 1, 1);
+    grid.attach(first_entry, 1, top + 1, 1, 1);
+    grid.attach(second_label, 0, top + 2, 1, 1);
+    grid.attach(second_entry, 1, top + 2, 1, 1);
+
+    return [first_entry, second_entry];
 }
 
 function build_combo(grid: any, top_index: number, iter_enum: any, label: string) {

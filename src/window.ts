@@ -609,47 +609,30 @@ export class ShellWindow {
                 border.add_style_class_name('pop-shell-border-maximize');
             }
 
-            const stack_number = this.stack;
-            let dimensions = null;
+            // A stack displays its windows as a cascading pile, so the border
+            // only surrounds the window which is displayed on top.
+            const dimensions = [
+                x - borderSize,
+                y - borderSize,
+                width + 2 * borderSize,
+                height + 2 * borderSize,
+            ];
 
-            if (stack_number !== null) {
-                const stack = this.ext.auto_tiler?.forest.stacks.get(stack_number);
-                if (stack) {
-                    let stack_tab_height = stack.tabs_height;
+            [x, y, width, height] = dimensions;
 
-                    if (borderSize === 0 || this.grab) {
-                        // not in max screen state
-                        stack_tab_height = 0;
-                    }
+            const workspace = this.meta.get_workspace();
 
-                    dimensions = [
-                        x - borderSize,
-                        y - stack_tab_height - borderSize,
-                        width + 2 * borderSize,
-                        height + stack_tab_height + 2 * borderSize,
-                    ];
-                }
-            } else {
-                dimensions = [x - borderSize, y - borderSize, width + 2 * borderSize, height + 2 * borderSize];
+            if (workspace === null) return;
+
+            const screen = workspace.get_work_area_for_monitor(this.meta.get_monitor());
+
+            if (screen) {
+                width = Math.min(width, screen.x + screen.width);
+                height = Math.min(height, screen.y + screen.height);
             }
 
-            if (dimensions) {
-                [x, y, width, height] = dimensions;
-
-                const workspace = this.meta.get_workspace();
-
-                if (workspace === null) return;
-
-                const screen = workspace.get_work_area_for_monitor(this.meta.get_monitor());
-
-                if (screen) {
-                    width = Math.min(width, screen.x + screen.width);
-                    height = Math.min(height, screen.y + screen.height);
-                }
-
-                border.set_position(x, y);
-                border.set_size(width, height);
-            }
+            border.set_position(x, y);
+            border.set_size(width, height);
         }
     }
 

@@ -1,3 +1,21 @@
+# Pop Shell (personal fork)
+
+This is a personal fork of [pop-os/shell](https://github.com/pop-os/shell), used on the author's machine with GNOME Shell 51 only. Other GNOME versions are not supported, as some APIs have been adjusted for 51, such as `maximize()` and `unmaximize()`, which no longer take maximize flags.
+
+Changes made in this fork:
+
+- **Stacks are displayed as a cascading pile instead of using tabs.** Every window of a stack has the same size, and each window is translated further to the bottom-right of the window behind it, which keeps the title bar and the left edge of every window visible. The size of the windows is reduced by the offsets, so that the entire pile remains within the area which the stack occupies, and the window in front is never cut off by the edge of the display.
+- **The focused window is displayed in front.** Focusing a window of a stack swaps its place with the window which is displayed in front, so the window which was selected is always completely visible.
+- **The direction keys rotate the pile.** `Super` + a direction key displays every window of the stack in front in turn, where `Right` and `Down` cycle forwards and `Left` and `Up` cycle backwards and undo a step. Once the whole stack has been displayed in front, pressing the same direction again shifts focus out of the stack and skips its other windows.
+- **Two new settings.** `stack-offset-x` and `stack-offset-y`, which default to 12 and 40 pixels, configure the horizontal and vertical offsets of the cascade. They can be edited under "Stacked Window Offset" in the preferences of the extension.
+- A number of performance fixes, which reduce the work done in the shell when windows are opened and moved.
+
+---
+
+**The content below is the README of the upstream project, unmodified.**
+
+---
+
 # Pop Shell
 
 Pop Shell is a keyboard-driven layer for GNOME Shell which allows for quick and sensible navigation and management of windows. The core feature of Pop Shell is the addition of advanced tiling window management — a feature that has been highly sought within our community. For many — ourselves included — i3wm has become the leading competitor to the GNOME desktop.

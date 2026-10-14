@@ -84,6 +84,18 @@
             <summary>Maximum width of tiled windows, in pixels (0 to disable)</summary>
         </key>
 
+        <key type="u" name="stack-offset-x">
+            <default>12</default>
+            <range min="0" max="256"/>
+            <summary>Horizontal offset between each window of a stack, in pixels</summary>
+        </key>
+
+        <key type="u" name="stack-offset-y">
+            <default>40</default>
+            <range min="0" max="256"/>
+            <summary>Vertical offset between each window of a stack, in pixels</summary>
+        </key>
+
         <!-- Focus Shifting -->
         <key type="as" name="focus-left">
             <default><![CDATA[['<Super>Left','<Super>KP_Left','<Super>h']]]></default>

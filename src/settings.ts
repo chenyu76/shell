@@ -69,6 +69,8 @@ const SHOW_SKIPTASKBAR = 'show-skip-taskbar';
 const MOUSE_CURSOR_FOLLOWS_ACTIVE_WINDOW = 'mouse-cursor-follows-active-window';
 const MOUSE_CURSOR_FOCUS_LOCATION = 'mouse-cursor-focus-location';
 const MAX_WINDOW_WIDTH = 'max-window-width';
+const STACK_OFFSET_X = 'stack-offset-x';
+const STACK_OFFSET_Y = 'stack-offset-y';
 
 export class ExtensionSettings {
     ext: Settings = settings_new_schema('org.gnome.shell.extensions.pop-shell');
@@ -178,6 +180,14 @@ export class ExtensionSettings {
         return this.ext.get_uint(MAX_WINDOW_WIDTH);
     }
 
+    stack_offset_x(): number {
+        return this.ext.get_uint(STACK_OFFSET_X);
+    }
+
+    stack_offset_y(): number {
+        return this.ext.get_uint(STACK_OFFSET_Y);
+    }
+
     // Setters
 
     set_active_hint(set: boolean) {
@@ -260,5 +270,13 @@ export class ExtensionSettings {
 
     set_max_window_width(set: number) {
         this.ext.set_uint(MAX_WINDOW_WIDTH, set);
+    }
+
+    set_stack_offset_x(set: number) {
+        this.ext.set_uint(STACK_OFFSET_X, set);
+    }
+
+    set_stack_offset_y(set: number) {
+        this.ext.set_uint(STACK_OFFSET_Y, set);
     }
 }

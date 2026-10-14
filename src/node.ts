@@ -39,8 +39,10 @@ export interface NodeStack {
 }
 
 function stack_detach(node: NodeStack, stack: Stack, idx: number) {
+    const entity = node.entities[idx];
+
     node.entities.splice(idx, 1);
-    stack.remove_by_pos(idx);
+    stack.remove(entity);
 }
 
 export function stack_find(node: NodeStack, entity: Entity): null | number {
@@ -123,7 +125,7 @@ export function stack_replace(ext: Ext, node: NodeStack, window: ShellWindow) {
 export function stack_remove(forest: Forest, node: NodeStack, entity: Entity): null | number {
     const stack = forest.stacks.get(node.idx);
     if (!stack) return null;
-    const idx = stack.remove_tab(entity);
+    const idx = stack.remove(entity);
     if (idx !== null) node.entities.splice(idx, 1);
     return idx;
 }
@@ -228,15 +230,9 @@ export class Node {
                 break;
             // Stack
             case 3:
-                const size = ext.dpi * 4;
-
+                // The windows of a stack are arranged by the stack itself, which
+                // divides the area between the windows and cascades them.
                 this.inner.rect = area.clone();
-                this.inner.rect.y += size * 6;
-                this.inner.rect.height -= size * 6;
-
-                for (const entity of this.inner.entities) {
-                    record(entity, parent, this.inner.rect);
-                }
 
                 if (ext.auto_tiler) {
                     ext.auto_tiler.forest.stack_updates.push([this.inner, parent]);

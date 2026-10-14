@@ -628,26 +628,23 @@ export class AutoTiler {
     }
 
     update_stack(ext: Ext, stack: node.NodeStack) {
-        if (stack.rect) {
-            const container = this.forest.stacks.get(stack.idx);
-            if (container) {
-                container.clear();
+        const container = this.forest.stacks.get(stack.idx);
 
-                // Collect names of each entity in the stack
-                for (const entity of stack.entities) {
-                    const window = ext.windows.get(entity);
-                    if (window) {
-                        window.stack = stack.idx;
-                        container.add(window);
-                    }
-                }
-
-                container.update_positions(stack.rect);
-                container.auto_activate();
-            }
-        } else {
+        if (!stack.rect) {
             log.warn('stack rect was null');
+            return;
         }
+
+        if (!container) return;
+
+        for (const entity of stack.entities) {
+            const window = ext.windows.get(entity);
+            if (window) window.stack = stack.idx;
+        }
+
+        container.set_entities(stack.entities);
+        container.set_area(stack.rect);
+        container.auto_activate();
     }
 
     windows_are_siblings(a: Entity, b: Entity): Entity | null {

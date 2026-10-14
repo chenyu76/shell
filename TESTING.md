@@ -53,7 +53,21 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Stacks can be resized with the keyboard.
 - [ ] Stacks can be resized with the mouse.
 - [ ] Lock and unlock the screen-- stacks should still exist and windows should not have moved.
-- [ ] Full-screen an application within the stack, then quit the application-- the remaining tabs should be visible.
+- [ ] Full-screen an application within the stack, then quit the application-- the remaining windows should be visible.
+- [ ] Every window of the stack is visible as a cascading pile, and the entire pile fits inside of the stack's area.
+- [ ] Clicking a window of the stack displays it completely, in front of the other windows of the stack.
+- [ ] Cycling with the direction keys brings every window of the stack to the front in turn (`Super` + `Left`/`Up` and `Super` + `Right`/`Down` rotate in opposite directions).
+- [ ] Once every window of the stack has been displayed in front, the direction keys shift focus out of the stack, and skip the stack's other windows.
+- [ ] Focus can still be shifted out of a stack which holds a single window.
+- [ ] Cycling a stack which fills the display keeps displaying the next window, since there is no window to shift focus to.
+- [ ] Changing the stack offsets in the preferences re-arranges the stacks, and a value of `0` displays the windows on top of one another.
+- [ ] Adding and removing windows from a stack does not scramble the order of the pile.
+
+The arrangement of a stack can additionally be checked without a running shell:
+
+```
+make compile && node scripts/stack-cascade-check.mjs
+```
 
 ### Workspaces
 
