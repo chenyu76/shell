@@ -106,3 +106,7 @@ export function shortest_side(origin: [number, number], rect: Rectangular): numb
     shortest = Math.min(shortest, distance(origin, east(rect)));
     return Math.min(shortest, distance(origin, south(rect)));
 }
+
+export function position_distance(from: Rectangular, to: Rectangular): number {
+    return Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y));
+}

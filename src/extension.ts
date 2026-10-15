@@ -1257,16 +1257,26 @@ export class Ext extends Ecs.System<ExtEvent> {
 
                 this.monitors.insert(win.entity, [win.meta.get_monitor(), win.workspace_id()]);
 
-                if (rect.x != crect.x || rect.y != crect.y) {
-                    if (rect.contains(cursor_rect())) {
-                        if (this.auto_tiler.attached.contains(win.entity)) {
-                            this.auto_tiler.on_drop(this, win, mon_drop);
-                        } else {
-                            this.auto_tiler.reflow(this, win.entity);
-                        }
-                    } else {
+                const moved = Geom.position_distance(rect, crect);
+
+                if (moved === 0) return;
+
+                // A window which was dragged less than the dead zone keeps the
+                // arrangement of the tiles, so that a drag which only shakes the
+                // window does not change it.
+                if (moved < this.drag_dead_zone()) {
+                    this.auto_tiler.reflow(this, win.entity);
+                    return;
+                }
+
+                if (rect.contains(cursor_rect())) {
+                    if (this.auto_tiler.attached.contains(win.entity)) {
                         this.auto_tiler.on_drop(this, win, mon_drop);
+                    } else {
+                        this.auto_tiler.reflow(this, win.entity);
                     }
+                } else {
+                    this.auto_tiler.on_drop(this, win, mon_drop);
                 }
             } else {
                 const fork_entity = this.auto_tiler.attached.get(win.entity);
@@ -1545,6 +1555,11 @@ export class Ext extends Ecs.System<ExtEvent> {
     }
 
     /** Triggered when a grab operation has been started */
+    /** The distance which a dragged window must cover for the arrangement of the tiles to change */
+    private drag_dead_zone(): number {
+        return this.settings.drag_dead_zone() * this.dpi;
+    }
+
     on_grab_start(meta: null | Meta.Window, op: any) {
         if (!meta) return;
         let win = this.get_window(meta);
@@ -1573,6 +1588,12 @@ export class Ext extends Ecs.System<ExtEvent> {
                     if (!win || !this.auto_tiler || !this.grab_op || this.grab_op.entity !== entity) {
                         this.drag_signal = null;
                         return false;
+                    }
+
+                    // The arrangement is not going to change while the window is
+                    // barely moved, so the overlay is left hidden.
+                    if (Geom.position_distance(this.grab_op.rect, win.rect()) < this.drag_dead_zone()) {
+                        return true;
                     }
 
                     const [cursor, monitor] = this.cursor_status();

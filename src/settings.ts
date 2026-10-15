@@ -69,6 +69,7 @@ const SHOW_SKIPTASKBAR = 'show-skip-taskbar';
 const MOUSE_CURSOR_FOLLOWS_ACTIVE_WINDOW = 'mouse-cursor-follows-active-window';
 const MOUSE_CURSOR_FOCUS_LOCATION = 'mouse-cursor-focus-location';
 const MAX_WINDOW_WIDTH = 'max-window-width';
+const DRAG_DEAD_ZONE = 'drag-dead-zone';
 const STACK_OFFSET_X = 'stack-offset-x';
 const STACK_OFFSET_Y = 'stack-offset-y';
 
@@ -180,6 +181,10 @@ export class ExtensionSettings {
         return this.ext.get_uint(MAX_WINDOW_WIDTH);
     }
 
+    drag_dead_zone(): number {
+        return this.ext.get_uint(DRAG_DEAD_ZONE);
+    }
+
     stack_offset_x(): number {
         return this.ext.get_uint(STACK_OFFSET_X);
     }
@@ -270,6 +275,10 @@ export class ExtensionSettings {
 
     set_max_window_width(set: number) {
         this.ext.set_uint(MAX_WINDOW_WIDTH, set);
+    }
+
+    set_drag_dead_zone(set: number) {
+        this.ext.set_uint(DRAG_DEAD_ZONE, set);
     }
 
     set_stack_offset_x(set: number) {

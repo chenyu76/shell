@@ -84,6 +84,12 @@
             <summary>Maximum width of tiled windows, in pixels (0 to disable)</summary>
         </key>
 
+        <key type="u" name="drag-dead-zone">
+            <default>40</default>
+            <range min="0" max="500"/>
+            <summary>Distance which a window must be dragged to change the tiling arrangement, in pixels</summary>
+        </key>
+
         <key type="u" name="stack-offset-x">
             <default>12</default>
             <range min="0" max="256"/>

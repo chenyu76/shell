@@ -23,6 +23,7 @@ globalThis.global = {
     },
 };
 
+const geom = await import('../target/geom.js');
 const stack_module = await import('../target/stack.js');
 const { Stack } = stack_module;
 
@@ -405,6 +406,32 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     stack.auto_activate();
 
     check('the order of the pile is kept when the stack is rebuilt', order() === arranged, `${arranged} -> ${order()}`);
+}
+
+// --- the distance which a window was dragged -------------------------------------
+{
+    // The distance is the largest of the distances along both axes, so that a drag
+    // which only shakes a window by a little stays within the dead zone.
+    check(
+        'a drag along one axis is measured by that axis',
+        geom.position_distance({ x: 100, y: 100, width: 50, height: 50 }, { x: 130, y: 100, width: 50, height: 50 }) === 30,
+    );
+
+    check(
+        'a drag along both axes is measured by the longest of them',
+        geom.position_distance({ x: 100, y: 100, width: 50, height: 50 }, { x: 110, y: 160, width: 50, height: 50 }) === 60,
+    );
+
+    check(
+        'a window which was not moved was dragged by nothing',
+        geom.position_distance({ x: 100, y: 100, width: 50, height: 50 }, { x: 100, y: 100, width: 20, height: 20 }) === 0,
+    );
+
+    check(
+        'a dead zone of 40 keeps a drag of 39 inside of it, and one of 40 out of it',
+        geom.position_distance({ x: 0, y: 0, width: 1, height: 1 }, { x: -39, y: 30, width: 1, height: 1 }) < 40 &&
+            !(geom.position_distance({ x: 0, y: 0, width: 1, height: 1 }, { x: -40, y: 0, width: 1, height: 1 }) < 40),
+    );
 }
 
 // --- the windows around a stack -------------------------------------------------

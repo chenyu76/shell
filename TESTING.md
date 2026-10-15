@@ -23,6 +23,8 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Super direction keys changes focus in the correct direction
 - [ ] Windows moved with the keyboard tile into place
 - [ ] Windows moved with the mouse tile into place
+- [ ] A window which is dragged by less than the dead zone of the preferences returns to the tile which it came from, without re-arranging, stacking or floating, and without the placement overlay appearing.
+- [ ] A window which is dragged further than the dead zone is placed as it was before, and dragging it back into its own tile within the dead zone keeps it there.
 - [ ] Windows swap with the keyboard (test with different size windows)
 - [ ] Windows can be resized with the keyboard (Test resizing four windows above, below, right, and left to ensure shortcut consistency)
 - [ ] Windows can be resized with the mouse

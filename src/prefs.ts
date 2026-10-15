@@ -9,6 +9,7 @@ import * as log from './log.js';
 import * as focus from './focus.js';
 
 interface AppWidgets {
+    drag_dead_zone: any;
     fullscreen_launcher: any;
     stacking_with_mouse: any;
     inner_gap: any;
@@ -125,6 +126,15 @@ function settings_dialog_new(): Gtk.Container {
         }
     });
 
+    app.drag_dead_zone.set_text(String(ext.drag_dead_zone()));
+    app.drag_dead_zone.connect('activate', (widget: any) => {
+        let parsed = parseInt((widget.get_text() as string).trim());
+        if (!isNaN(parsed)) {
+            ext.set_drag_dead_zone(parsed);
+            Settings.sync();
+        }
+    });
+
     app.stack_offset_x.set_text(String(ext.stack_offset_x()));
     app.stack_offset_x.connect('activate', (widget: any) => {
         let parsed = parseInt((widget.get_text() as string).trim());
@@ -197,6 +207,11 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         xalign: 0.0,
     });
 
+    const drag_dead_zone_label = new Gtk.Label({
+        label: 'Window drag dead zone (in pixels)',
+        xalign: 0.0,
+    });
+
     const [outer_gap, inner_gap] = number_section(grid, 9, 'Gaps (in pixels)', 'Outer', 'Inner');
 
     const [stack_offset_x, stack_offset_y] = number_section(
@@ -222,6 +237,7 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         mouse_cursor_focus_position: build_combo(grid, 7, focus.FocusPosition, 'Mouse Cursor Focus Position'),
         log_level: build_combo(grid, 8, log.LOG_LEVELS, 'Log Level'),
         max_window_width: number_entry(),
+        drag_dead_zone: number_entry(),
     };
 
     grid.attach(win_label, 0, 0, 1, 1);
@@ -247,6 +263,9 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
 
     grid.attach(max_window_width_label, 0, 12, 1, 1);
     grid.attach(settings.max_window_width, 1, 12, 1, 1);
+
+    grid.attach(drag_dead_zone_label, 0, 16, 1, 1);
+    grid.attach(settings.drag_dead_zone, 1, 16, 1, 1);
 
     return [settings, grid];
 }
