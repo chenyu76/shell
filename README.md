@@ -1,29 +1,68 @@
-# Cascading Pile Fork of Pop Shell 
+# Cascading Pile Fork of Pop Shell
 
-This is a personal fork of [pop-os/shell](https://github.com/pop-os/shell), used on my machine only (currently GNOME 51). Other GNOME versions are not supported. 
+This is a personal fork of [pop-os/shell](https://github.com/pop-os/shell), used on my machine only (currently GNOME 51). Other GNOME versions are not supported.
 
-Changes made in this fork:
+Changes in this fork:
 
 ## Cascading Pile
 
-Stacks are displayed as a cascading pile instead of using tabs. Like this:
+Stacks are displayed as a cascading pile instead of using tabs. I think this is more intuitive.
 
 ```text
-    ┌──────────────────────────┐
-    │ App 1              - O X │
-    │ ┌────────────────────────┴─┐
-    │ │ App 2              - O X │
-    │ │ ┌────────────────────────┴─┐
-    │ │ │ App 3              - O X │
-    │ │ │                          │
-    └─┤ │                          │
-      │ │                          │
-      └─┤                          │
-        │                          │
-        └──────────────────────────┘
+┌───────────────────┐
+│ App 1       - O X │
+│ ┌─────────────────┴─┐
+│ │ App 2       - O X │
+│ │ ┌─────────────────┴─┐
+│ │ │ App 3       - O X │
+│ │ │                   │
+└─┤ │ The               │
+  │ │ Cascading Pile    │
+  └─┤                   │
+    │                   │
+    └───────────────────┘
 ```
 
-Focusing a window of a stack swaps its place with the window which is displayed in front, so the window which was selected is always completely visible. The horizontal and vertical offsets of the cascade can be configure in the preferences of the extension.
+In contrast, the original Pop Shell looks like this:
+
+```text
+┌───────┬───────┬───────┐
+│App1  X│App2  X│App3  X│
+├───────┴───────┴───────┤
+│ App 3           - O X │
+│                       │
+│ Pop Shell             │
+│ tabs                  │
+│                       │
+│                       │
+│                       │
+│                       │
+└───────────────────────┘
+```
+
+Focusing a window of a stack swaps its place with the window which is displayed in front, so the window which was selected is always completely visible and all windows in the stack are always clickable.
+
+```text
+┌───────────────────┐                     ┌───────────────────┐
+│ App 1       - O X │                     │ App 1       - O X │
+│ ┌─────────────────┴─┐                   │ ┌─────────────────┴─┐
+│ │ App 2       - O X │                   │ │ App 3       - O X │
+│ │ ┌─────────────────┴─┐                 │ │ ┌─────────────────┴─┐
+│ │ │ App 3       - O X │   click App 2   │ │ │ App 2       - O X │
+│ │ │                   │  ────────────→  │ │ │                   │
+└─┤ │ The               │                 └─┤ │ App 2 and App 3   │
+  │ │ Cascading Pile    │                   │ │ have been swapped.│
+  └─┤                   │                   └─┤                   │
+    │                   │                     │                   │
+    └───────────────────┘                     └───────────────────┘
+```
+
+- The horizontal and vertical offsets of the cascade can be configure in the preferences of the extension.
+- Navigating windows by shortcuts are now more intuitive.
+
+## Window Drag Dead Zone
+
+A window which is dragged by less than a dead zone is returned to the tile which it came from, so that a click which some small shakes does not re-arrange the tiles unexpectedly.
 
 ## Fixes
 
@@ -57,6 +96,7 @@ Therefore, we see an opportunity here to advance the usability of the GNOME desk
   - [Floating Mode](#floating-mode): Behaviors specific to the floating mode
   - [Tiling Mode](#tiling-mode): Behaviors specific to the auto-tiling mode
 - [Developers](#developers): Guide for getting started with development
+
 ---
 
 ## The Proposal
@@ -120,9 +160,9 @@ If you want to uninstall the extension, you may invoke `make uninstall`, and the
 - [Gentoo](https://packages.gentoo.org/packages/gnome-extra/gnome-shell-extension-pop-shell): `emerge gnome-shell-extension-pop-shell`
 - [openSUSE Tumbleweed](https://build.opensuse.org/package/show/openSUSE:Factory/gnome-shell-extension-pop-shell): `sudo zypper install gnome-shell-extension-pop-shell`
 - [Arch Linux](https://aur.archlinux.org/packages/?O=0&K=gnome-shell-extension-pop-shell) (Using Yay as AUR helper):
-    - `yay -S gnome-shell-extension-pop-shell`
-    - For precompiled binary version: `yay -S gnome-shell-extension-pop-shell-bin`
-    - For GitHub repository version: `yay -S gnome-shell-extension-pop-shell-git`
+  - `yay -S gnome-shell-extension-pop-shell`
+  - For precompiled binary version: `yay -S gnome-shell-extension-pop-shell-bin`
+  - For GitHub repository version: `yay -S gnome-shell-extension-pop-shell-git`
 
 ---
 
@@ -221,13 +261,16 @@ Disabled by default, this mode manages windows using a tree-based tiling window 
   - See [#customizing the window float list](#customizing-the-floating-window-list)
 
 ### Customizing the Floating Window List
+
 There is file `$XDG_CONFIG_HOME/pop-shell/config.json` where you can add the following structure:
+
 ```
 {
   class: "<WM_CLASS String from xprop>",
   title: "<Optional Window Title>"
 }
 ```
+
 For example, doing `xprop` on GNOME Settings (or GNOME Control Center), the WM_CLASS values are `gnome-control-center` and `Gnome-control-center`. Use the second value (Gnome-control-center), which pop-shell will read. The `title` field is optional.
 
 After applying changes in `config.json`, you can reload the tiling if it doesn't work the first time.
