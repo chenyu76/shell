@@ -389,8 +389,6 @@ export class ShellWindow {
             if (this.is_maximized()) {
                 meta.unmaximize();
             }
-            actor.remove_all_transitions();
-
             ext.movements.insert(this.entity, clone);
 
             ext.register({ tag: 2, window: this, kind: { tag: 1 } });
@@ -616,7 +614,7 @@ export class ShellWindow {
     }
 
     update_border_layout() {
-        let { x, y, width, height } = this.meta.get_frame_rect();
+        let { x, y, width, height } = this.ext.window_animations.visual_rect(this);
 
         const border = this.border;
         let borderSize = this.border_size;

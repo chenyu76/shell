@@ -16,6 +16,30 @@ Note that because the logs are from GNOME Shell, there will be messages from all
 
 Tasks for a tester to verify when approving a patch. Use complex window layouts and at least two displays. Turn on active hint during testing.
 
+### Window movement animations
+
+Build and run the compositor-independent checks:
+
+```
+make compile
+node scripts/window-animation-check.mjs
+node scripts/stack-cascade-check.mjs
+```
+
+The animation checks cover asynchronous Wayland geometry and actor updates, constrained sizes,
+interruption and retargeting, system motion settings, native effects, and resource cleanup.
+They do not validate actual rendering; run the following checks in a separate GNOME test session.
+
+- [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
+- [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.
+- [ ] Mouse dragging and interactive resizing remain immediate; dropping a window animates its final placement.
+- [ ] The active hint, drawn stack titles and visible adjustment overlay follow the moving window.
+- [ ] Test Wayland and XWayland applications, CSD shadows, minimum window sizes, and displays with different scales.
+- [ ] Disable system animations, or enable reduced motion: layout changes are immediate. Changing these settings during a transition also restores the actual window immediately.
+- [ ] Maximize, fullscreen, minimize or close a window mid-transition: GNOME's effects work and no snapshot or transform remains.
+- [ ] Enter overview, change workspace, lock the screen, change displays, or disable the extension during a transition: no snapshot or invisible window remains.
+- [ ] Re-enable the extension: initial layout restoration is immediate and subsequent moves animate normally.
+
 ## With tiling enabled
 
 ### Tiling

@@ -14,6 +14,12 @@ interface Global {
     window_group: Clutter.Actor;
     window_manager: Meta.WindowManager;
     workspace_manager: Meta.WorkspaceManager;
+    compositor: {
+        get_laters(): {
+            add(type: number, callback: () => boolean): number;
+            remove(id: number): void;
+        };
+    };
 }
 
 interface ImportMeta {
@@ -182,6 +188,11 @@ declare namespace Clutter {
 
     interface Actor extends Rectangular, GObject.Object {
         visible: boolean;
+        mapped: boolean;
+        translation_x: number;
+        translation_y: number;
+        scale_x: number;
+        scale_y: number;
         x_align: ActorAlign;
         y_align: ActorAlign;
         opacity: number;
@@ -198,12 +209,14 @@ declare namespace Clutter {
         get_preferred_height(for_width: number): [number, number];
         get_preferred_width(for_height: number): [number, number];
         get_stage(): Clutter.Actor | null;
+        get_content(): any;
         get_transition(param: string): any | null;
         grab_key_focus(): void;
         is_visible(): boolean;
         queue_redraw(): void;
         remove_all_children(): void;
         remove_all_transitions(): void;
+        remove_transition(property: string): void;
         remove_child(child: Actor): void;
         set_child_above_sibling(child: Actor, sibling: Actor | null): void;
         set_child_below_sibling(child: Actor, sibling: Actor | null): void;
@@ -284,7 +297,7 @@ declare namespace Meta {
         change_workspace_by_index(workspace: number, append: boolean): void;
         delete(timestamp: number): void;
         get_buffer_rect(): Rectangular;
-        get_compositor_private(): Clutter.Actor | null;
+        get_compositor_private(): Meta.WindowActor | null;
         get_display(): Meta.Display | null;
         get_description(): string;
         get_frame_rect(): Rectangular;
@@ -319,6 +332,7 @@ declare namespace Meta {
 
     interface WindowActor extends Clutter.Actor {
         get_meta_window(): Meta.Window;
+        paint_to_content(rect: Rectangular): any;
     }
 
     interface WindowManager extends GObject.Object {}

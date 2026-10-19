@@ -13,6 +13,7 @@ import * as Rect from './rectangle.js';
 import * as Settings from './settings.js';
 import * as Tiling from './tiling.js';
 import * as Window from './window.js';
+import { WindowAnimations } from './window_animation.js';
 import * as launcher from './launcher.js';
 import * as auto_tiler from './auto_tiler.js';
 import * as node from './node.js';
@@ -129,6 +130,22 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     /** Animate window movements */
     animate_windows: boolean = true;
+
+    readonly window_animations = new WindowAnimations((windows) => {
+        const stacks = new Set<Stack>();
+        for (const window of windows) {
+            if (window.destroying) continue;
+            window.update_border_layout();
+            const stack = window.stack !== null ? this.auto_tiler?.forest.stacks.get(window.stack) : null;
+            if (stack) stacks.add(stack);
+            if (this.overlay.visible && this.tiler.window !== null && Ecs.entity_eq(this.tiler.window, window.entity)) {
+                this.set_overlay(this.window_animations.visual_rect(window));
+            }
+        }
+        for (const stack of stacks) stack.update_animation_layout();
+    });
+
+    private animations_suppressed_until = 0;
 
     button: any = null;
     button_gio_icon_auto_on: any = null;
@@ -305,6 +322,11 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     // System interface
 
+    private suppress_window_animations() {
+        this.animations_suppressed_until = GLib.get_monotonic_time() + 500_000;
+        this.window_animations.cancel_all();
+    }
+
     /** Registers a generic callback to be executed in the event loop. */
     register_fn(callback: () => void, name?: string) {
         this.register({ tag: 1, callback, name });
@@ -337,10 +359,12 @@ export class Ext extends Ecs.System<ExtEvent> {
                         return;
                     }
 
-                    actor.remove_all_transitions();
-                    const { x, y, width, height } = movement;
-
-                    window.meta.move_resize_frame(true, x, y, width, height);
+                    const animate = this.animate_windows && !this.init && !win.grab && this.grab_op === null &&
+                        !overview.visible && !sessionMode.isLocked && !win.meta.minimized &&
+                        !win.is_maximized() && !win.meta.is_fullscreen() && win.same_workspace() &&
+                        !win.reassignment && this.displays_updating === null && this.workareas_update === null &&
+                        GLib.get_monotonic_time() >= this.animations_suppressed_until;
+                    this.window_animations.move(window, movement, animate);
 
                     this.monitors.insert(window.entity, [win.meta.get_monitor(), win.workspace_id()]);
 
@@ -905,6 +929,7 @@ export class Ext extends Ecs.System<ExtEvent> {
         const stack = window.stack;
 
         window.destroying = true;
+        this.window_animations.cancel(window);
 
         // Disconnect all signals on this window
         this.window_signals.take_with(win, (signals) => {
@@ -1562,6 +1587,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     on_grab_start(meta: null | Meta.Window, op: any) {
         if (!meta) return;
+        this.window_animations.cancel_all();
         let win = this.get_window(meta);
         if (win) {
             win.grab = true;
@@ -1873,6 +1899,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     /** Handle workspace change events */
     on_workspace_changed(win: Window.ShellWindow) {
+        this.window_animations.cancel(win);
         if (this.auto_tiler && !this.contains_tag(win.entity, Tags.Floating)) {
             const id = this.workspace_id(win);
             const prev_id = this.monitors.get(win.entity);
@@ -2004,7 +2031,7 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.gap_outer = gap * 4 * this.dpi;
     }
 
-    set_overlay(rect: Rectangle) {
+    set_overlay(rect: Rectangular) {
         this.overlay.x = rect.x;
         this.overlay.y = rect.y;
         this.overlay.width = rect.width;
@@ -2014,6 +2041,14 @@ export class Ext extends Ecs.System<ExtEvent> {
     /** Begin listening for signals from windows, and add any pre-existing windows. */
     signals_attach() {
         // this.conf_watch = this.attach_config();
+
+        const animation_settings = St.Settings.get();
+        for (const property of ['enable-animations', 'slow-down-factor']) {
+            this.connect(animation_settings, `notify::${property}`, () => this.window_animations.settings_changed());
+        }
+        if (St.ReducedMotion !== undefined) {
+            this.connect(animation_settings, 'notify::reduced-motion', () => this.window_animations.settings_changed());
+        }
 
         this.tiler.queue.start(100, (movement) => {
             movement();
@@ -2039,14 +2074,23 @@ export class Ext extends Ecs.System<ExtEvent> {
         });
 
         this.size_changed_signal = this.connect(wim, 'size-change', (_, actor, event, _before, _after) => {
+            const win = this.get_window(actor.get_meta_window());
+            if (!win) return;
+            this.window_animations.native_change(win);
             if (this.auto_tiler) {
-                let win = this.get_window(actor.get_meta_window());
-                if (!win) return;
-
                 if (event === Meta.SizeChange.MAXIMIZE || event === Meta.SizeChange.UNMAXIMIZE) {
                     this.register(Events.window_event(win, WindowEvent.Maximize));
                 } else {
                     this.register(Events.window_event(win, WindowEvent.Fullscreen));
+                }
+            }
+        });
+
+        this.connect(wim, 'kill-window-effects', (_, actor) => {
+            for (const window of this.windows.values()) {
+                if (window.meta === actor.get_meta_window()) {
+                    this.window_animations.cancel(window);
+                    break;
                 }
             }
         });
@@ -2100,11 +2144,13 @@ export class Ext extends Ecs.System<ExtEvent> {
             }
 
             if (sessionMode.isLocked) {
+                this.suppress_window_animations();
                 this.exit_modes();
             }
         });
 
         this.connect(overview, 'showing', () => {
+            this.suppress_window_animations();
             this.register(Events.global(GlobalEvent.OverviewShown));
         });
 
@@ -2223,6 +2269,7 @@ export class Ext extends Ecs.System<ExtEvent> {
         });
 
         this.connect(wim, 'switch-workspace', () => {
+            this.suppress_window_animations();
             this.hide_all_borders();
         });
 
@@ -2473,6 +2520,7 @@ export class Ext extends Ecs.System<ExtEvent> {
     update_display_configuration_before() { }
 
     update_display_configuration(workareas_only: boolean) {
+        this.suppress_window_animations();
         if (!this.auto_tiler || sessionMode.isLocked) return;
 
         if (this.ignore_display_update) {
@@ -2860,6 +2908,8 @@ export default class PopShellExtension extends Extension {
             });
         }
 
+        ext.animate_windows = true;
+
         if (ext.settings.show_skiptaskbar()) {
             _show_skip_taskbar_windows(ext);
         } else {
@@ -2893,6 +2943,8 @@ export default class PopShellExtension extends Extension {
         log.info('disable');
 
         if (ext) {
+            ext.animate_windows = false;
+            ext.window_animations.cancel_all();
             if (sessionMode.isLocked) {
                 ext.was_locked = true;
                 return;

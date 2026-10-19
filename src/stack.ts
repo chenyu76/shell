@@ -510,25 +510,37 @@ export class Stack {
             if (!window) continue;
 
             const title = this.titles.find((title) => Ecs.entity_eq(title.entity, entity)) ?? this.add_title(entity, window);
-            const rect = rects[idx];
+            const rect = this.ext.window_animations.visual_rect(window, rects[idx]);
             const label = title.label;
 
             label.text = window.title();
-
-            const [, natural_width] = label.get_preferred_width(-1);
-            const [, natural_height] = label.get_preferred_height(natural_width);
-            const width = Math.min(natural_width, rect.width);
-            const height = Math.min(natural_height, band);
-
-            label.set_size(width, height);
-            label.set_position(
-                rect.x + Math.round((rect.width - width) / 2),
-                rect.y + Math.round((band - height) / 2),
-            );
+            this.position_title(label, rect);
         }
 
         this.titles_actor.visible = this.titles.length > 0;
         this.raise_titles();
+    }
+
+    private position_title(label: St.Label, rect: Rectangular) {
+        const band = this.offsets_used[1];
+        const [, natural_width] = label.get_preferred_width(-1);
+        const [, natural_height] = label.get_preferred_height(natural_width);
+        const width = Math.min(natural_width, rect.width);
+        const height = Math.min(natural_height, band);
+
+        label.set_size(width, height);
+        label.set_position(
+            rect.x + Math.round((rect.width - width) / 2),
+            rect.y + Math.round((band - height) / 2),
+        );
+    }
+
+    /** Animation frames only reposition existing titles; membership and text are unchanged. */
+    update_animation_layout() {
+        for (const title of this.titles) {
+            const window = this.ext.windows.get(title.entity);
+            if (window) this.position_title(title.label, this.ext.window_animations.visual_rect(window));
+        }
     }
 
     /** Whether the title of this window is drawn over the pile */
