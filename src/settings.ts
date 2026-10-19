@@ -195,14 +195,6 @@ export class ExtensionSettings {
 
     // Setters
 
-    set_active_hint(set: boolean) {
-        this.ext.set_boolean(ACTIVE_HINT, set);
-    }
-
-    set_active_hint_border_radius(set: number) {
-        this.ext.set_uint(ACTIVE_HINT_BORDER_RADIUS, set);
-    }
-
     set_stacking_with_mouse(set: boolean) {
         this.ext.set_boolean(STACKING_WITH_MOUSE, set);
     }

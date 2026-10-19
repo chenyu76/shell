@@ -66,11 +66,11 @@ Resizing windows or moving windows now have animations.
 
 ## Window Drag Dead Zone
 
-A window which is dragged by less than a dead zone is returned to the tile which it came from, so that a click which some small shakes does not re-arrange the tiles unexpectedly.
+A window which is dragged by less than a dead zone is returned to the tile which it came from, so that a click with some small shakes does not re-arrange the tiles unexpectedly.
 
-## Fixes
+## Other
 
-A number of fixes, which may reduce the work done in the shell when windows are opened and moved.
+Some fixes and some adjustments of settings.
 
 ---
 

@@ -82,6 +82,7 @@ function make_ext(offsets, titled = new Array()) {
             workspaces_only_on_primary: () => false,
         },
         tiler: { window: null },
+        window_animations: { visual_rect: (window, fallback) => fallback ?? window.rect() },
         grab_op: null,
         set_overlay: () => {},
         size_signals_block: () => {},
@@ -526,6 +527,23 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
         stack.cycle(true);
         const rotated = stack.display.slice(0, -1).map((entity) => name_of(windows, entity)).sort();
         return labels().map((label) => label.text).sort().join(',') === rotated.join(',');
+    })());
+
+    check('the titles follow animated visual geometry without re-arranging windows', (() => {
+        const animated = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
+        const behind = animated.stack.ext.windows.get(animated.stack.display[0]);
+        const frame = behind.rect();
+        const visual = { ...frame, x: frame.x + 55, y: frame.y + 33 };
+        const before = JSON.stringify(animated.windows.map((window) => window.state.rect));
+        animated.stack.ext.window_animations = {
+            visual_rect: (window, fallback) => window === behind ? visual : fallback ?? window.rect(),
+        };
+        behind.title = () => { throw new Error('Animation frames must not reload title text'); };
+        animated.stack.update_animation_layout();
+        const label = labels().find((label) => label.text === behind.name);
+        return Math.abs(label.position.x + label.size.width / 2 - (visual.x + visual.width / 2)) <= 0.5 &&
+            Math.abs(label.position.y + label.size.height / 2 - (visual.y + 16)) <= 0.5 &&
+            JSON.stringify(animated.windows.map((window) => window.state.rect)) === before;
     })());
 
     check('a window which is not selected by the rules has no drawn title', (() => {

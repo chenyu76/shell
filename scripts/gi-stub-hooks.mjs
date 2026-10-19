@@ -79,6 +79,7 @@ class Actor {
 
 export class Label extends Actor {}
 export class Widget extends Actor {}
+export class Window {}
 
 export const ActorAlign = { START: 0, CENTER: 1, END: 2 };
 export const EllipsizeMode = { NONE: 0, START: 1, MIDDLE: 2, END: 3 };
@@ -93,7 +94,7 @@ export function reset_actors() {
     actors.splice(0);
 }
 
-export default { ActorAlign, EllipsizeMode, Label, Widget, drawn_actors, reset_actors };
+export default { ActorAlign, EllipsizeMode, Label, Widget, Window, drawn_actors, reset_actors };
 `;
 
 /** An inline module which stands in for every gi:// module the extension imports */

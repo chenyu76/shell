@@ -2098,9 +2098,8 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.connect(this.settings.ext, 'changed', (_s, key: string) => {
             switch (key) {
                 case 'active-hint':
-                    if (indicator) indicator.toggle_active.setToggleState(this.settings.active_hint());
-
                     this.show_border_on_focused();
+                    break;
                 case 'gap-inner':
                     this.on_gap_inner();
                     break;
@@ -2430,15 +2429,13 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
     }
 
-    auto_tile_on() {
+    private enable_auto_tiler(): auto_tiler.AutoTiler {
         this.settings.set_edge_tiling(false);
         this.hide_all_borders();
 
         if (indicator) indicator.toggle_tiled.setToggleState(true);
 
-        const original = this.active_workspace();
-
-        let tiler = new auto_tiler.AutoTiler(
+        const tiler = new auto_tiler.AutoTiler(
             new Forest.Forest()
                 .connect_on_attach(this.on_tile_attach.bind(this))
                 .connect_on_detach(this.on_tile_detach.bind(this)),
@@ -2449,6 +2446,12 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         this.settings.set_tile_by_default(true);
         this.button.icon.gicon = this.button_gio_icon_auto_on; // type: Gio.Icon
+        return tiler;
+    }
+
+    auto_tile_on() {
+        const original = this.active_workspace();
+        const tiler = this.enable_auto_tiler();
 
         for (const window of this.windows.values()) {
             if (window.is_tilable(this)) {
@@ -2462,6 +2465,41 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
 
         this.register_fn(() => this.switch_to_workspace(original));
+    }
+
+    /** Consolidate the active workspace without restoring layouts on other workspaces. */
+    reset_windows() {
+        const workspace = wom.get_active_workspace();
+        const windows: Array<Window.ShellWindow> = [];
+        for (const meta of workspace.list_windows()) {
+            if (meta.window_type !== Meta.WindowType.NORMAL || meta.get_transient_for() !== null ||
+                meta.is_on_all_workspaces()) continue;
+            const window = this.get_window(meta);
+            if (window?.actor_exists()) windows.push(window);
+        }
+        if (windows.length === 0) return;
+
+        const focused = this.focus_window();
+        const focused_index = focused ? windows.indexOf(focused) : -1;
+        if (focused && focused_index > 0) {
+            windows.splice(focused_index, 1);
+            windows.unshift(focused);
+        }
+        const front = windows[0];
+
+        this.exit_modes();
+        this.unset_grab_op();
+        this.window_animations.cancel_all();
+        const tiler = this.auto_tiler ?? this.enable_auto_tiler();
+        this.size_changed_block();
+        try {
+            tiler.reset_to_pile(this, windows, [front.meta.get_monitor(), workspace.index()]);
+        } finally {
+            this.size_changed_unblock();
+        }
+        this.after_movements(() => {
+            if (front.actor_exists()) front.activate(false);
+        });
     }
 
     /** Calls a function once windows are no longer queued for movement.
@@ -2929,7 +2967,7 @@ export default class PopShellExtension extends Extension {
         layoutManager.addChrome(ext.overlay);
 
         if (!indicator) {
-            indicator = new PanelSettings.Indicator(ext);
+            indicator = new PanelSettings.Indicator(ext, () => this.openPreferences());
             panel.addToStatusArea('pop-shell', indicator.button);
         }
 

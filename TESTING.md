@@ -16,6 +16,20 @@ Note that because the logs are from GNOME Shell, there will be messages from all
 
 Tasks for a tester to verify when approving a patch. Use complex window layouts and at least two displays. Turn on active hint during testing.
 
+### Panel menu and preferences
+
+```
+make compile
+node scripts/reset-windows-check.mjs
+```
+
+- [ ] The panel menu contains **Reset Windows** and **Preferences**; Active Hint and gap controls are available only in Preferences.
+- [ ] Reset Windows collects the current workspace's ordinary application windows into one pile on the focused window's monitor. Floating, minimized, maximized and fullscreen windows are included; dialogs and windows pinned to all workspaces are left alone.
+- [ ] The previously focused window remains in front. Other workspaces keep their layouts, including their piles.
+- [ ] Resetting with tiling disabled enables tiling without rearranging other workspaces. Repeating a reset, or resetting an empty workspace, is harmless.
+- [ ] Preferences retains the saved Active Hint switch, border radius and color, including alpha. Changes apply immediately to the shell, and the radius remains within 0–30 pixels.
+- [ ] The color chooser is part of Preferences, and the preferences window scrolls to reach every setting.
+
 ### Window movement animations
 
 Build and run the compositor-independent checks:

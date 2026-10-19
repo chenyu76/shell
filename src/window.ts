@@ -168,6 +168,8 @@ export class ShellWindow {
             if (this.border) {
                 if (key === 'hint-color-rgba') {
                     this.update_hint_colors();
+                } else if (key === 'active-hint-border-radius') {
+                    this.update_border_style();
                 }
             }
             return false;

@@ -327,6 +327,7 @@ declare namespace Meta {
         raise(): void;
         skip_taskbar: boolean;
         unmaximize(): void;
+        unmake_fullscreen(): void;
         unminimize(): void;
     }
 

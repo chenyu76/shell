@@ -29,6 +29,49 @@ export class AutoTiler {
         this.attached = attached;
     }
 
+    /** Rebuild the selected windows as one pile; the first window stays in front. */
+    reset_to_pile(ext: Ext, windows: ReadonlyArray<ShellWindow>, [monitor, workspace]: [number, number]) {
+        const first = windows[0];
+        if (!first) return;
+
+        for (const window of windows) this.prepare_for_pile(ext, window);
+
+        const smart_gaps = ext.settings.smart_gaps();
+        const [entity, fork] = this.forest.create_toplevel(
+            first.entity, ext.monitor_work_area(monitor).clone(), [monitor, workspace],
+        );
+        const index = this.forest.stacks.insert(new Stack(ext, first.entity, workspace, monitor));
+        fork.left = new node.Node({
+            kind: NodeKind.STACK, idx: index, entities: windows.map(window => window.entity), rect: null,
+        });
+        for (const window of windows) {
+            window.stack = index;
+            window.smart_gapped = smart_gaps;
+            this.forest.on_attach(entity, window.entity);
+        }
+        this.update_toplevel(ext, fork, monitor, smart_gaps);
+    }
+
+    private prepare_for_pile(ext: Ext, window: ShellWindow) {
+        // Rebuilding the tree must not restore each window's former floating geometry.
+        window.ignore_detach = true;
+        ext.size_signals_block(window);
+        try {
+            this.detach_window(ext, window.entity);
+            ext.delete_tag(window.entity, Tags.Floating);
+            ext.add_tag(window.entity, Tags.ForceTile);
+            delete window.was_attached_to;
+            ext.connect_window(window);
+
+            if (window.meta.minimized) window.meta.unminimize();
+            if (window.meta.is_fullscreen()) window.meta.unmake_fullscreen();
+            if (window.is_maximized()) window.meta.unmaximize();
+        } finally {
+            window.ignore_detach = false;
+            ext.size_signals_unblock(window);
+        }
+    }
+
     /** Swap window associations in the auto-tiler
      *
      * Call this when a window has swapped positions with another, so that we

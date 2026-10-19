@@ -1,12 +1,14 @@
 import Gtk from 'gi://Gtk';
 
 import Gio from 'gi://Gio';
-const Settings = Gio.Settings;
+import Gdk from 'gi://Gdk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import * as settings from './settings.js';
 import * as log from './log.js';
 import * as focus from './focus.js';
+
+const Settings = Gio.Settings;
 
 interface AppWidgets {
     drag_dead_zone: any;
@@ -24,6 +26,9 @@ interface AppWidgets {
     mouse_cursor_focus_position: any;
     log_level: any;
     max_window_width: any;
+    active_hint: any;
+    active_hint_border_radius: any;
+    hint_color: any;
 }
 
 export default class PopShellPreferences extends ExtensionPreferences {
@@ -36,7 +41,13 @@ export default class PopShellPreferences extends ExtensionPreferences {
             dialog.show();
         }
         log.debug(JSON.stringify(dialog));
-        return dialog;
+        return new Gtk.ScrolledWindow({
+            child: dialog,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            min_content_height: 480,
+            max_content_height: 600,
+            propagate_natural_height: true,
+        });
     }
 }
 
@@ -153,6 +164,15 @@ function settings_dialog_new(): Gtk.Container {
         }
     });
 
+    ext.ext.bind('active-hint', app.active_hint, 'active', Gio.SettingsBindFlags.DEFAULT);
+    ext.ext.bind('active-hint-border-radius', app.active_hint_border_radius, 'value', Gio.SettingsBindFlags.DEFAULT);
+    const color = new Gdk.RGBA();
+    color.parse(ext.hint_color_rgba());
+    app.hint_color.set_rgba(color);
+    app.hint_color.connect('notify::rgba', () => {
+        ext.set_hint_color_rgba(app.hint_color.get_rgba().to_string());
+    });
+
     return grid;
 }
 
@@ -212,21 +232,7 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         xalign: 0.0,
     });
 
-    const [outer_gap, inner_gap] = number_section(grid, 9, 'Gaps (in pixels)', 'Outer', 'Inner');
-
-    const [stack_offset_x, stack_offset_y] = number_section(
-        grid,
-        13,
-        'Stacked Window Offset (in pixels)',
-        'Horizontal',
-        'Vertical',
-    );
-
     const settings = {
-        inner_gap,
-        outer_gap,
-        stack_offset_x,
-        stack_offset_y,
         fullscreen_launcher: new Gtk.Switch({ halign: Gtk.Align.END }),
         stacking_with_mouse: new Gtk.Switch({ halign: Gtk.Align.END }),
         smart_gaps: new Gtk.Switch({ halign: Gtk.Align.END }),
@@ -236,8 +242,21 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         mouse_cursor_follows_active_window: new Gtk.Switch({ halign: Gtk.Align.END }),
         mouse_cursor_focus_position: build_combo(grid, 7, focus.FocusPosition, 'Mouse Cursor Focus Position'),
         log_level: build_combo(grid, 8, log.LOG_LEVELS, 'Log Level'),
+        outer_gap: number_entry(),
+        inner_gap: number_entry(),
         max_window_width: number_entry(),
+        stack_offset_x: number_entry(),
+        stack_offset_y: number_entry(),
         drag_dead_zone: number_entry(),
+        active_hint: new Gtk.Switch({ halign: Gtk.Align.END }),
+        active_hint_border_radius: new Gtk.SpinButton({
+            adjustment: new Gtk.Adjustment({ lower: 0, upper: 30, step_increment: 1, page_increment: 5 }),
+            numeric: true,
+            halign: Gtk.Align.END,
+        }),
+        hint_color: new Gtk.ColorDialogButton({
+            dialog: new Gtk.ColorDialog({ with_alpha: true }), halign: Gtk.Align.END,
+        }),
     };
 
     grid.attach(win_label, 0, 0, 1, 1);
@@ -261,11 +280,27 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
     grid.attach(mouse_cursor_follows_active_window_label, 0, 6, 1, 1);
     grid.attach(settings.mouse_cursor_follows_active_window, 1, 6, 1, 1);
 
+    settings_section(grid, 9, 'Gaps (in pixels)', [
+        ['Outer', settings.outer_gap],
+        ['Inner', settings.inner_gap],
+    ]);
+
     grid.attach(max_window_width_label, 0, 12, 1, 1);
     grid.attach(settings.max_window_width, 1, 12, 1, 1);
 
+    settings_section(grid, 13, 'Stacked Window Offset (in pixels)', [
+        ['Horizontal', settings.stack_offset_x],
+        ['Vertical', settings.stack_offset_y],
+    ]);
+
     grid.attach(drag_dead_zone_label, 0, 16, 1, 1);
     grid.attach(settings.drag_dead_zone, 1, 16, 1, 1);
+
+    settings_section(grid, 17, 'Active Hint', [
+        ['Show Active Hint', settings.active_hint],
+        ['Active Border Radius', settings.active_hint_border_radius],
+        ['Active Hint Color', settings.hint_color],
+    ]);
 
     return [settings, grid];
 }
@@ -274,21 +309,13 @@ function number_entry(): Gtk.Widget {
     return new Gtk.Entry({ input_purpose: Gtk.InputPurpose.NUMBER });
 }
 
-/** A titled pair of numeric entries, such as the inner and outer gaps */
-function number_section(grid: any, top: number, title: string, first: string, second: string): [any, any] {
-    const section_label = new Gtk.Label({ label: title, xalign: 0.0 });
-    const first_label = new Gtk.Label({ label: first, xalign: 0.0, margin_start: 24 });
-    const second_label = new Gtk.Label({ label: second, xalign: 0.0, margin_start: 24 });
-    const first_entry = number_entry();
-    const second_entry = number_entry();
-
-    grid.attach(section_label, 0, top, 1, 1);
-    grid.attach(first_label, 0, top + 1, 1, 1);
-    grid.attach(first_entry, 1, top + 1, 1, 1);
-    grid.attach(second_label, 0, top + 2, 1, 1);
-    grid.attach(second_entry, 1, top + 2, 1, 1);
-
-    return [first_entry, second_entry];
+/** Keep section headings and indented setting labels consistent across control types. */
+function settings_section(grid: any, top: number, title: string, rows: ReadonlyArray<readonly [string, Gtk.Widget]>) {
+    grid.attach(new Gtk.Label({ label: title, xalign: 0.0, margin_top: 12 }), 0, top, 2, 1);
+    for (const [index, [label, widget]] of rows.entries()) {
+        grid.attach(new Gtk.Label({ label, xalign: 0.0, margin_start: 24 }), 0, top + index + 1, 1, 1);
+        grid.attach(widget, 1, top + index + 1, 1, 1);
+    }
 }
 
 function build_combo(grid: any, top_index: number, iter_enum: any, label: string) {
