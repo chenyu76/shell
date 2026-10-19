@@ -209,7 +209,6 @@ declare namespace Clutter {
         get_preferred_height(for_width: number): [number, number];
         get_preferred_width(for_height: number): [number, number];
         get_stage(): Clutter.Actor | null;
-        get_content(): any;
         get_transition(param: string): any | null;
         grab_key_focus(): void;
         is_visible(): boolean;

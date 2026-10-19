@@ -685,9 +685,7 @@ export class AutoTiler {
             if (window) window.stack = stack.idx;
         }
 
-        container.set_entities(stack.entities);
-        container.set_area(stack.rect);
-        container.auto_activate();
+        container.update_layout(stack.entities, stack.rect);
     }
 
     windows_are_siblings(a: Entity, b: Entity): Entity | null {

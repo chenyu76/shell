@@ -41,11 +41,24 @@ node scripts/stack-cascade-check.mjs
 ```
 
 The animation checks cover asynchronous Wayland geometry and actor updates, constrained sizes,
-interruption and retargeting, system motion settings, native effects, and resource cleanup.
+merged requests, interruption and retargeting, system motion settings, native effects, and resource cleanup.
 They do not validate actual rendering; run the following checks in a separate GNOME test session.
+
+The full-extension close/focus regression can also run in an isolated headless GNOME session
+(requires GNOME Shell headless Wayland support, GJS and GTK 4):
+
+```
+python3 scripts/pile-close-runtime-check.py
+```
+
+This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
+It supplies the queued focus change explicitly because the headless session has no interactive seat,
+and checks that closing the front of a pile leaves each survivor's frame origin fixed during one resize.
 
 - [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
 - [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.
+- [ ] Close the front or a background window in a pile, including reducing two windows to one: the remaining windows move and resize together without an intermediate arrangement.
+- [ ] Redirect a running animation: the transition starts at its current visual position and receives a full duration. Repeated requests for the same target do not restart it.
 - [ ] Mouse dragging and interactive resizing remain immediate; dropping a window animates its final placement.
 - [ ] The active hint, drawn stack titles and visible adjustment overlay follow the moving window.
 - [ ] Test Wayland and XWayland applications, CSD shadows, minimum window sizes, and displays with different scales.

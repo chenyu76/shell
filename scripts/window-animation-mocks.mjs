@@ -28,6 +28,7 @@ export class Actor extends Signals {
     parent = null;
     mapped = true;
     animation = null;
+    easeCalls = 0;
     transitions = new Map();
     destroyed = false;
     constructor(props = {}) {
@@ -52,7 +53,6 @@ export class Actor extends Signals {
     get_parent() { return this.parent; }
     add_child(child) { this.children.push(child); child.parent = this; }
     set_child_above_sibling() { }
-    get_content() { return this.content; }
     paint_to_content(rect) {
         if (!(rect instanceof BoxedRectangle)) throw new Error('Expected boxed rectangle');
         if (this.captureFails) throw new Error('No texture');
@@ -73,6 +73,7 @@ export class Actor extends Signals {
         }
     }
     ease(params) {
+        this.easeCalls++;
         const { duration, mode, onStopped, ...targets } = params;
         this.animation = { duration, mode, onStopped, targets, start: {} };
         for (const key of Object.keys(targets)) {

@@ -33,7 +33,7 @@ function make_entity() {
 }
 
 function make_window(entity, name, rect) {
-    const state = { rect: { ...rect }, raises: 0, visible: true };
+    const state = { rect: { ...rect }, moves: [], raises: 0, visible: true };
     const meta = {
         connect: () => 0,
         disconnect: () => {},
@@ -65,6 +65,7 @@ function make_window(entity, name, rect) {
         rect: () => ({ ...state.rect }),
         move(_ext, target, on_complete) {
             state.rect = { x: target.x, y: target.y, width: target.width, height: target.height };
+            state.moves.push({ ...state.rect });
             if (on_complete) on_complete();
         },
     };
@@ -115,9 +116,9 @@ function scenario(offsets, area, names, titled = new Array()) {
     const ext = make_ext(offsets, titled);
     const windows = names.map((name) => add_window(ext, name, area));
 
-    const stack = new Stack(ext, windows[0].entity, 0, 0);
-    stack.set_entities(windows.map((window) => window.entity));
-    stack.set_area(area);
+    const stack = new Stack(ext, windows.at(-1).entity, 0, 0);
+    stack.active_id = windows.length - 1;
+    stack.update_layout(windows.map((window) => window.entity), area);
 
     return { ext, stack, windows };
 }
@@ -194,9 +195,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c']);
     const order = () => stack.display.map((e) => name_of(windows, e)).join(',');
 
-    // update_stack() activates the stack's window after adding them.
-    stack.active = windows[0].entity;
-    stack.auto_activate();
+    stack.activate(windows[0].entity);
 
     check('the active window is displayed in front', order().endsWith('a'), order());
 
@@ -234,8 +233,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     const order = () => names(stack.display).join(',');
     const front = () => names(stack.display)[stack.display.length - 1];
 
-    stack.active = windows[0].entity;
-    stack.auto_activate();
+    stack.activate(windows[0].entity);
 
     const start_order = names(stack.display);
     const start = order();
@@ -310,8 +308,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('a stack of two windows toggles between them, and is then left', (() => {
         const pair = scenario([32, 32], AREA, ['one', 'two']);
-        pair.stack.active = pair.windows[0].entity;
-        pair.stack.auto_activate();
+        pair.stack.activate(pair.windows[0].entity);
 
         const first = front_of(pair);
         pair.stack.cycle(true);
@@ -322,8 +319,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('displaying another window of the stack restarts the cycle', (() => {
         const trio = scenario([32, 32], AREA, ['a', 'b', 'c']);
-        trio.stack.active = trio.windows[0].entity;
-        trio.stack.auto_activate();
+        trio.stack.activate(trio.windows[0].entity);
 
         // Cycle once, then display a window which is behind the one in front by
         // other means, which must allow the whole stack to be cycled again.
@@ -361,7 +357,8 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 {
     const { ext, stack, windows } = scenario([32, 32], AREA, ['a', 'b']);
     const extra = add_window(ext, 'c', AREA);
-    stack.set_entities([...windows, extra].map((window) => window.entity));
+    stack.update_layout([...windows, extra].map((window) => window.entity), AREA);
+    stack.activate(extra.entity);
 
     check(
         'a new window is displayed in front',
@@ -370,7 +367,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     );
 
     extra.state.rect = { ...AREA };
-    stack.set_area(AREA);
+    stack.update_layout(stack.entities, AREA);
     check(
         'the new window is cascaded once the stack is re-arranged',
         extra.state.rect.x === AREA.x + 2 * 32 && extra.state.rect.width === AREA.width - 2 * 32,
@@ -382,10 +379,50 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     check('a removed window is dropped from the display order', !stack.display.some((e) => e === removed), `${stack.display.length} left`);
 
     stack.remove(stack.entities[0]);
-    stack.set_area(AREA);
+    stack.update_layout(stack.entities, AREA);
     check(
         'the last remaining window fills the whole area',
         stack.ext.windows.get(stack.entities[0]).state.rect.width === AREA.width,
+    );
+}
+
+// --- closing windows commits one final geometry per survivor --------------------
+for (const count of [3, 2]) {
+    for (const front of [false, true]) {
+        const { stack, windows, ext } = scenario([32, 32], AREA, ['a', 'b', 'c'].slice(0, count));
+        const closing = front ? stack.display.at(-1) : stack.display[0];
+        stack.remove(closing);
+        ext.windows._map.delete(closing[0]);
+        const survivors = windows.filter(window => window.entity !== closing);
+        for (const window of survivors) window.state.moves.length = 0;
+        stack.update_layout(stack.entities, AREA);
+        check(
+            `closing the ${front ? 'front' : 'back'} of ${count} windows moves each survivor once`,
+            survivors.every(window => window.state.moves.length === 1),
+        );
+        check(
+            `${count - 1} survivors receive their final position and size together`,
+            stack.display.every((entity, index) => {
+                const rect = ext.windows.get(entity).state.moves[0];
+                return rect.x === AREA.x + index * 32 && rect.y === AREA.y + index * 32 &&
+                    rect.width === AREA.width - (count - 2) * 32 &&
+                    rect.height === AREA.height - (count - 2) * 32;
+            }),
+        );
+    }
+}
+
+{
+    const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    for (const window of windows) window.state.moves.length = 0;
+    stack.active_id = 0;
+    const area = { ...AREA, x: AREA.x + 100, width: AREA.width + 120 };
+    stack.update_layout(windows.map(window => window.entity), area);
+    check(
+        'updating area and active window together never submits an intermediate arrangement',
+        windows.every(window => window.state.moves.length === 1) &&
+            stack.display.at(-1) === windows[0].entity &&
+            windows[0].state.rect.x === area.x + 64,
     );
 }
 
@@ -394,17 +431,14 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c']);
     const order = () => stack.display.map((e) => name_of(windows, e)).join(',');
 
-    stack.active = windows[0].entity;
-    stack.auto_activate();
+    stack.activate(windows[0].entity);
     stack.cycle(true);
 
     const arranged = order();
 
     // update_stack() replaces the windows of the stack whenever the tree
     // changes, which must not scramble the pile.
-    stack.set_entities(windows.map((window) => window.entity));
-    stack.set_area(AREA);
-    stack.auto_activate();
+    stack.update_layout(windows.map((window) => window.entity), AREA);
 
     check('the order of the pile is kept when the stack is rebuilt', order() === arranged, `${arranged} -> ${order()}`);
 }
@@ -484,8 +518,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
 
-    stack.active = windows[0].entity;
-    stack.auto_activate();
+    stack.activate(windows[0].entity);
 
     const drawn = () => stack.display.slice(0, -1).map((entity) => name_of(windows, entity)).sort();
 
@@ -548,8 +581,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('a window which is not selected by the rules has no drawn title', (() => {
         const untitled = scenario([32, 32], AREA, ['a', 'b', 'c'], ['b']);
-        untitled.stack.active = untitled.windows[0].entity;
-        untitled.stack.auto_activate();
+        untitled.stack.activate(untitled.windows[0].entity);
 
         const texts = labels().map((label) => label.text);
         return texts.length === 1 && texts[0] === 'b';
@@ -557,8 +589,7 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('the titles are hidden once the stack may not be displayed', (() => {
         const hidden = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b']);
-        hidden.stack.active = hidden.windows[0].entity;
-        hidden.stack.auto_activate();
+        hidden.stack.activate(hidden.windows[0].entity);
         hidden.stack.set_visible(false);
 
         return labels().length === 0;
@@ -566,16 +597,14 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('a band which is too small to hold a title is left empty', (() => {
         const thin = scenario([32, 8], AREA, ['a', 'b', 'c'], ['a', 'b']);
-        thin.stack.active = thin.windows[0].entity;
-        thin.stack.auto_activate();
+        thin.stack.activate(thin.windows[0].entity);
 
         return labels().length === 0;
     })());
 
     check('a window which leaves the stack loses its drawn title', (() => {
         const leaving = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
-        leaving.stack.active = leaving.windows[0].entity;
-        leaving.stack.auto_activate();
+        leaving.stack.activate(leaving.windows[0].entity);
 
         // The window which is displayed behind the one in front leaves the stack.
         const entity = leaving.stack.display[0];
@@ -588,21 +617,19 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
 
     check('a window which a rebuild drops loses its drawn title', (() => {
         const rebuilt = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
-        rebuilt.stack.active = rebuilt.windows[0].entity;
-        rebuilt.stack.auto_activate();
+        rebuilt.stack.activate(rebuilt.windows[0].entity);
 
         const dropped = name_of(rebuilt.windows, rebuilt.stack.display[0]);
         const kept = rebuilt.windows.filter((window) => window.name !== dropped);
 
-        rebuilt.stack.set_entities(kept.map((window) => window.entity));
+        rebuilt.stack.update_layout(kept.map((window) => window.entity), AREA);
 
         return !labels().some((label) => label.text === dropped);
     })());
 
     check('the titles are removed with the stack', (() => {
         const removed = scenario([32, 32], AREA, ['a', 'b'], ['a', 'b']);
-        removed.stack.active = removed.windows[0].entity;
-        removed.stack.auto_activate();
+        removed.stack.activate(removed.windows[0].entity);
         removed.stack.destroy();
 
         return labels().length === 0;

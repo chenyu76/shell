@@ -118,12 +118,8 @@ export class Stack {
         this.titles_actor.hide();
     }
 
-    /** Sets the windows which are in this stack
-     *
-     * The order in which the windows are displayed is kept, and windows which
-     * joined the stack are displayed in front of the others.
-     */
-    set_entities(entities: Array<Entity>) {
+    /** Updates membership, area and active order in one arrangement. */
+    update_layout(entities: Array<Entity>, area: Rectangular) {
         this.active_disconnect();
 
         this.entities = entities.slice();
@@ -137,6 +133,8 @@ export class Stack {
         this.keep_titles(this.entities);
 
         this.reorder = true;
+        this.rect = { x: area.x, y: area.y, width: area.width, height: area.height };
+        this.auto_activate();
     }
 
     /** Displays a window of the stack in front of the others
@@ -314,12 +312,6 @@ export class Stack {
             width: rect.width + (count - 1) * dx,
             height: rect.height + (count - 1) * dy,
         };
-    }
-
-    /** Sets the area which the windows of this stack are arranged within */
-    set_area(rect: Rectangular) {
-        this.rect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-        this.arrange();
     }
 
     /** Displays every window of the stack, or hides it when it may not be shown */

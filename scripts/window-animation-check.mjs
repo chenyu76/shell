@@ -17,7 +17,6 @@ function scenario({ async = false, shadow = 0, reset = true } = {}) {
     let frame = { ...BEFORE };
     let requested;
     let submitted = 0;
-    let changed = 0;
     const layout_batches = [];
     const buffer = () => ({ x: frame.x - shadow, y: frame.y - shadow,
         width: frame.width + shadow * 2, height: frame.height + shadow * 2 });
@@ -39,18 +38,17 @@ function scenario({ async = false, shadow = 0, reset = true } = {}) {
     });
     const window = { meta };
     const animations = new WindowAnimations(windows => {
-        changed += windows.size;
         layout_batches.push([...windows]);
     });
     function commit(rect = requested, actorToo = true) {
+        const previous = frame;
         frame = { ...rect };
-        meta.emit('position-changed');
-        meta.emit('size-changed');
+        if (frame.x !== previous.x || frame.y !== previous.y) meta.emit('position-changed');
+        if (frame.width !== previous.width || frame.height !== previous.height) meta.emit('size-changed');
         if (actorToo) commitActor();
     }
     commitActor();
-    const clean = () => {
-        animations.cancel_all();
+    const assert_clean = () => {
         assert.equal(actor.opacity, 255);
         assert.equal(actor.translation_x, 0);
         assert.equal(actor.translation_y, 0);
@@ -62,8 +60,8 @@ function scenario({ async = false, shadow = 0, reset = true } = {}) {
         assert.equal(mocks.timers.size, 0);
         assert.equal(mocks.laters.size, 0);
     };
-    return { animations, window, actor, group, meta, commit, commitActor, clean, layout_batches,
-        submitted: () => submitted, changed: () => changed };
+    return { animations, window, actor, group, meta, commit, commitActor, assert_clean, layout_batches,
+        submitted: () => submitted };
 }
 
 function rectEqual(actual, expected) {
@@ -86,10 +84,11 @@ check('move submits once and transitions from the old frame, including shadows',
     s.actor.advance(0.5);
     mocks.redraw();
     rectEqual(s.animations.visual_rect(s.window), { x: 350, y: 150, width: 500, height: 350 });
-    assert.ok(s.changed() > 1);
+    assert.ok(s.layout_batches.length > 1);
     s.actor.complete();
     rectEqual(s.animations.visual_rect(s.window), TARGET);
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('animation setup failures still submit the real movement once', () => {
@@ -102,7 +101,8 @@ check('animation setup failures still submit the real movement once', () => {
     s.animations.move(s.window, TARGET, true);
     assert.equal(s.submitted(), 1);
     rectEqual(s.animations.visual_rect(s.window), TARGET);
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('real movement errors propagate unchanged and release animation resources', () => {
@@ -112,7 +112,8 @@ check('real movement errors propagate unchanged and release animation resources'
     s.meta.move_resize_frame = () => { attempts++; throw error; };
     assert.throws(() => s.animations.move(s.window, TARGET, true), actual => actual === error);
     assert.equal(attempts, 1);
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('Wayland waits for both geometry and the actor allocation, using constrained geometry', () => {
@@ -130,7 +131,8 @@ check('Wayland waits for both geometry and the actor allocation, using constrain
     s.actor.complete();
     rectEqual(s.animations.visual_rect(s.window), constrained);
     assert.equal(s.submitted(), 1);
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('unresponsive or rejected configure restores the real window after the timeout', () => {
@@ -139,7 +141,8 @@ check('unresponsive or rejected configure restores the real window after the tim
     assert.equal([...mocks.timers.values()][0].delay, 500);
     mocks.redraw();
     mocks.timeout();
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('continuous movement retargets from the currently displayed frame', () => {
@@ -148,13 +151,21 @@ check('continuous movement retargets from the currently displayed frame', () => 
     mocks.redraw();
     s.actor.advance(0.5);
     const intermediate = s.animations.visual_rect(s.window);
-    const previous = s.actor.animation;
+    const stopped = s.actor.animation.onStopped;
     s.animations.move(s.window, { ...TARGET, x: 900 }, true);
-    previous.onStopped?.(false);
+    const clone = s.group.children[1];
+    s.animations.move(s.window, { ...TARGET, x: 1000, width: 700 }, true);
+    stopped(false);
+    assert.equal(s.group.children[1], clone);
     assert.equal(s.group.children.length, 2);
     mocks.redraw();
+    assert.equal(s.actor.easeCalls, 2);
+    assert.equal(s.actor.animation.duration, 250);
     rectEqual(s.animations.visual_rect(s.window), intermediate);
-    s.clean();
+    s.actor.complete();
+    rectEqual(s.animations.visual_rect(s.window), { ...TARGET, x: 1000, width: 700 });
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('rapid movement can also replace a pending Wayland configure', () => {
@@ -165,7 +176,147 @@ check('rapid movement can also replace a pending Wayland configure', () => {
     s.commit();
     mocks.redraw();
     rectEqual(s.animations.visual_rect(s.window), BEFORE);
-    s.clean();
+    s.animations.cancel_all();
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('same-frame requests reuse one snapshot and animate only the final geometry', () => {
+    const s = scenario();
+    s.animations.move(s.window, { ...BEFORE, x: TARGET.x, y: TARGET.y }, true);
+    const clone = s.group.children[1];
+    const signals = [...s.actor.signals.keys()];
+    const timeout = [...mocks.timers.keys()];
+    const final = { ...TARGET, x: 900, width: 700 };
+    s.animations.move(s.window, { ...TARGET, x: 800 }, true);
+    s.animations.move(s.window, final, true);
+    assert.equal(s.group.children[1], clone);
+    assert.deepEqual([...s.actor.signals.keys()], signals);
+    assert.deepEqual([...mocks.timers.keys()], timeout);
+    assert.equal(s.actor.easeCalls, 0);
+    assert.equal(s.submitted(), 3);
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 1);
+    assert.equal(clone.easeCalls, 1);
+    rectEqual(s.animations.visual_rect(s.window), BEFORE);
+    s.actor.complete();
+    rectEqual(s.animations.visual_rect(s.window), final);
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('a move arriving before a resize waits and transitions both together', () => {
+    const s = scenario({ async: true, shadow: 12 });
+    s.animations.move(s.window, TARGET, true);
+    s.commit({ ...BEFORE, x: TARGET.x, y: TARGET.y });
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 0);
+    assert.equal(s.actor.opacity, 0);
+    rectEqual(s.animations.visual_rect(s.window), BEFORE);
+    s.commit(TARGET, false);
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 0);
+    s.commitActor();
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 1);
+    s.actor.advance(0.5);
+    rectEqual(s.animations.visual_rect(s.window), { x: 350, y: 150, width: 500, height: 350 });
+    s.actor.complete();
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('position-only requests start on the next redraw without waiting for a resize', () => {
+    const s = scenario();
+    const target = { ...BEFORE, x: 600, y: 200 };
+    s.animations.move(s.window, target, true);
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 1);
+    s.actor.complete();
+    rectEqual(s.animations.visual_rect(s.window), target);
+    mocks.redraw();
+    s.assert_clean();
+});
+
+for (const anchor of ['top-left', 'bottom-right']) {
+    check(`a resize preserves its ${anchor} anchor throughout the transition`, () => {
+        const s = scenario({ shadow: 12 });
+        const target = { ...BEFORE, width: 600, height: 400 };
+        if (anchor === 'bottom-right') {
+            target.x -= target.width - BEFORE.width;
+            target.y -= target.height - BEFORE.height;
+        }
+        s.animations.move(s.window, target, true);
+        mocks.redraw();
+        for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+            s.actor.advance(progress);
+            const rect = s.animations.visual_rect(s.window);
+            const right = anchor === 'bottom-right';
+            assert.ok(Math.abs(rect.x + (right ? rect.width : 0) - BEFORE.x - (right ? BEFORE.width : 0)) < 0.001);
+            assert.ok(Math.abs(rect.y + (right ? rect.height : 0) - BEFORE.y - (right ? BEFORE.height : 0)) < 0.001);
+        }
+        assert.equal(s.actor.easeCalls, 1);
+        s.actor.complete();
+        mocks.redraw();
+        s.assert_clean();
+    });
+}
+
+check('duplicate requests preserve the pending snapshot and its original timeout', () => {
+    const s = scenario({ async: true });
+    s.animations.move(s.window, TARGET, true);
+    const clone = s.group.children[1];
+    const timeout = [...mocks.timers.keys()];
+    mocks.redraw();
+    mocks.tick(450_000);
+    s.animations.move(s.window, TARGET, true);
+    assert.equal(s.group.children[1], clone);
+    assert.deepEqual([...mocks.timers.keys()], timeout);
+    mocks.timeout();
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('a rejected resize after a position update times out without a second animation', () => {
+    const s = scenario({ async: true });
+    s.animations.move(s.window, TARGET, true);
+    const actual = { ...BEFORE, x: TARGET.x, y: TARGET.y };
+    s.commit(actual);
+    mocks.redraw();
+    mocks.timeout();
+    assert.equal(s.actor.easeCalls, 0);
+    rectEqual(s.animations.visual_rect(s.window), actual);
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('a pending request reversed to the original geometry needs no animation', () => {
+    const s = scenario({ async: true });
+    s.animations.move(s.window, TARGET, true);
+    s.animations.move(s.window, BEFORE, true);
+    s.commit();
+    mocks.redraw();
+    assert.equal(s.actor.easeCalls, 0);
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('repeated requests preserve a running transition to constrained geometry', () => {
+    const s = scenario({ async: true });
+    s.animations.move(s.window, TARGET, true);
+    const constrained = { ...TARGET, width: 650 };
+    s.commit(constrained);
+    mocks.redraw();
+    const animation = s.actor.animation;
+    s.actor.advance(0.5);
+    const visual = s.animations.visual_rect(s.window);
+    s.animations.move(s.window, TARGET, true);
+    assert.equal(s.actor.animation, animation);
+    assert.equal(s.actor.easeCalls, 1);
+    rectEqual(s.animations.visual_rect(s.window), visual);
+    s.actor.complete();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('duplicate boxed geometry notifications preserve an existing transition', () => {
@@ -177,7 +328,9 @@ check('duplicate boxed geometry notifications preserve an existing transition', 
     assert.equal(s.actor.animation, animation);
     s.meta.emit('size-changed');
     assert.equal(s.group.children.length, 2);
-    s.clean();
+    s.animations.cancel_all();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 for (const setting of ['enable_animations', 'reduced_motion', 'slow_down_factor']) {
@@ -187,14 +340,16 @@ for (const setting of ['enable_animations', 'reduced_motion', 'slow_down_factor'
         s.animations.move(s.window, TARGET, true);
         assert.equal(s.submitted(), 1);
         assert.equal(s.actor.animation, null);
-        s.clean();
+        mocks.redraw();
+        s.assert_clean();
 
         const active = scenario();
         active.animations.move(active.window, TARGET, true);
         mocks.redraw();
         mocks.settings[setting] = setting === 'reduced_motion' ? 1 : 0;
         active.animations.settings_changed();
-        active.clean();
+        mocks.redraw();
+        active.assert_clean();
     });
 }
 
@@ -205,7 +360,8 @@ for (const signal of ['workspace-changed', 'notify::minimized', 'notify::fullscr
             s.animations.move(s.window, TARGET, true);
             if (running) mocks.redraw();
             s.meta.emit(signal);
-            s.clean();
+            mocks.redraw();
+            s.assert_clean();
         }
     });
 }
@@ -230,7 +386,8 @@ check('native transitions and missing textures are left intact', () => {
         assert.equal(s.actor.animation, null);
         assert.equal(s.submitted(), 1);
         if (reason === 'opacity' || reason === 'scale-x') assert.ok(s.actor.get_transition(reason).native);
-        s.clean();
+        mocks.redraw();
+        s.assert_clean();
     }
 });
 
@@ -246,7 +403,9 @@ check('native state changes cancel and briefly inhibit overlapping plugin animat
     s.animations.move(s.window, TARGET, true);
     mocks.redraw();
     assert.ok(s.actor.animation);
-    s.clean();
+    s.animations.cancel_all();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('a client resize during animation reveals its actual geometry', () => {
@@ -254,7 +413,8 @@ check('a client resize during animation reveals its actual geometry', () => {
     s.animations.move(s.window, TARGET, true);
     mocks.redraw();
     s.commit({ ...TARGET, width: 700 });
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('disabled moves and cancellation preserve unrelated native effects', () => {
@@ -267,7 +427,8 @@ check('disabled moves and cancellation preserve unrelated native effects', () =>
     s.actor.transitions.set('opacity', { native: true });
     s.animations.cancel_all();
     assert.ok(s.actor.get_transition('opacity').native);
-    s.clean();
+    mocks.redraw();
+    s.assert_clean();
 });
 
 check('one controller independently animates and cleans up multiple windows', () => {
@@ -283,8 +444,9 @@ check('one controller independently animates and cleans up multiple windows', ()
     mocks.redraw();
     assert.ok(b.actor.animation);
     a.animations.cancel_all();
-    a.clean();
-    b.clean();
+    mocks.redraw();
+    a.assert_clean();
+    b.assert_clean();
 });
 
 check('property notifications from multiple windows produce one layout batch per redraw', () => {
@@ -303,8 +465,9 @@ check('property notifications from multiple windows produce one layout batch per
     assert.deepEqual(new Set(a.layout_batches.at(-1)), new Set([a.window, b.window]));
     a.animations.cancel_all();
     assert.equal(mocks.laters.size, 0);
-    a.clean();
-    b.clean();
+    mocks.redraw();
+    a.assert_clean();
+    b.assert_clean();
 });
 
 console.log(`ALL ${checks} ANIMATION CHECKS PASSED`);

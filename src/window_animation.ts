@@ -15,6 +15,7 @@ interface Animation {
     clone: Clutter.Actor;
     source: Rectangular;
     before: Rectangular;
+    requested: Rectangular;
     target: Rectangular | null;
     opacity: number;
     timeout: number | null;
@@ -26,8 +27,22 @@ function equal(a: Rectangular, b: Rectangular): boolean {
     return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
+function same_size(a: Rectangular, b: Rectangular): boolean {
+    return a.width === b.width && a.height === b.height;
+}
+
+// GI boxed fields are not enumerable; a spread copy would lose them.
+function copy_rect(rect: Rectangular): Rectangular {
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+}
+
 function valid(rect: Rectangular): boolean {
     return [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0;
+}
+
+function has_native_effect(actor: Clutter.Actor): boolean {
+    return actor.translation_x !== 0 || actor.translation_y !== 0 || actor.scale_x !== 1 || actor.scale_y !== 1 ||
+        [...TRANSFORMS, 'opacity'].some((property) => actor.get_transition(property));
 }
 
 /** Visual transitions only: the movement queue and its callbacks never wait for these. */
@@ -61,16 +76,11 @@ export class WindowAnimations {
         const meta = window.meta;
         const before = meta.get_frame_rect();
 
-        // Reflows often request the same geometry while an animation is running.
-        if (equal(before, target)) {
-            if (!enabled || !this.motion_enabled()) this.cancel(window);
-        } else {
-            try {
-                this.prepare(window, before, target, enabled);
-            } catch (error) {
-                this.cancel(window);
-                log.warn(`Window animation unavailable: ${error}`);
-            }
+        try {
+            this.prepare(window, before, target, enabled);
+        } catch (error) {
+            this.cancel(window);
+            log.warn(`Window animation unavailable: ${error}`);
         }
 
         // Animation failures may fall back; real movement failures must reach the caller.
@@ -90,24 +100,34 @@ export class WindowAnimations {
         const eligible = enabled && actor?.mapped && (actor.opacity > 0 || owned) && valid(source) && valid(target) &&
             this.motion_enabled() && GLib.get_monotonic_time() >= (this.inhibited.get(window) ?? 0) &&
             // Leave transforms owned by Shell (map/maximize/fullscreen/etc.) alone.
-            (owned || (actor.translation_x === 0 && actor.translation_y === 0 &&
-                actor.scale_x === 1 && actor.scale_y === 1 &&
-                ![...TRANSFORMS, 'opacity'].some((property) => actor.get_transition(property))));
+            (owned || !has_native_effect(actor));
 
-        // Mutter clips snapshots against the actor's untransformed allocation. Capture
-        // after resetting our old transform, then display that content at `source`.
-        // A pending configure still has only its original snapshot to display.
-        const pending_content = previous?.target === null ? previous.clone.get_content() : null;
+        if (!eligible || !actor) {
+            this.cancel(window);
+            return;
+        }
+        if (previous?.actor === actor) {
+            if (equal(previous.requested, target)) return;
+            if (previous.target === null) {
+                previous.before = before;
+                previous.requested = copy_rect(target);
+                this.geometry_changed(previous);
+                return;
+            }
+        }
+
+        // Mutter clips against the untransformed allocation. Reset our old
+        // transform before capture, then display that content at `source`.
         this.cancel(window);
-        if (!eligible || !actor) return;
+        if (!previous && equal(before, target)) return;
 
         const parent = actor.get_parent();
         if (!parent) return;
-        const clone = this.create_snapshot(actor, before, source, pending_content);
+        const clone = this.create_snapshot(actor, before, source);
         if (!clone) return;
 
         const state: Animation = {
-            window, actor, clone, source, before, target: null, opacity: actor.opacity,
+            window, actor, clone, source, before, requested: copy_rect(target), target: null, opacity: actor.opacity,
             timeout: null, later: null, signals: [],
         };
         this.animations.set(window, state);
@@ -130,20 +150,20 @@ export class WindowAnimations {
         actor: Meta.WindowActor,
         before: Rectangular,
         source: Rectangular,
-        pending_content: unknown,
     ): Clutter.Actor | null {
+        let content;
         try {
             // Preserve Mutter's boxed rectangle type across GNOME versions.
-            const content = pending_content ?? actor.paint_to_content(before);
-            return content ? new St.Widget({
-                content, reactive: false,
-                x: source.x, y: source.y, width: source.width, height: source.height,
-                offscreen_redirect: Clutter.OffscreenRedirect.ALWAYS,
-            }) : null;
-        } catch (_) {
+            content = actor.paint_to_content(before);
+        } catch {
             // A window without a texture must still be moved normally.
             return null;
         }
+        return content ? new St.Widget({
+            content, reactive: false,
+            x: source.x, y: source.y, width: source.width, height: source.height,
+            offscreen_redirect: Clutter.OffscreenRedirect.ALWAYS,
+        }) : null;
     }
 
     private connect_signals(state: Animation) {
@@ -209,7 +229,14 @@ export class WindowAnimations {
             return;
         }
         // Do not assume move_resize_frame synchronously resizes a Wayland surface.
-        if (equal(target, state.before) || !this.actor_ready(actor, buffer)) return;
+        if (equal(target, state.before) && !equal(target, state.requested)) return;
+        // A compositor-side move can arrive before the client's resized buffer.
+        if (!same_size(state.before, state.requested) && same_size(target, state.before)) return;
+        if (!this.actor_ready(actor, buffer)) return;
+        if (equal(source, target)) {
+            this.finish(state);
+            return;
+        }
 
         if (state.timeout !== null) GLib.source_remove(state.timeout);
         state.timeout = null;
@@ -221,8 +248,7 @@ export class WindowAnimations {
         actor.translation_x = source.x - actor.x - (target.x - buffer.x) * scale_x;
         actor.translation_y = source.y - actor.y - (target.y - buffer.y) * scale_y;
         actor.opacity = state.opacity;
-        // GI boxed fields are not enumerable, so spreading the rectangle would lose them.
-        state.target = { x: target.x, y: target.y, width: target.width, height: target.height };
+        state.target = copy_rect(target);
         this.queue_layout(window);
 
         clone.ease({

@@ -327,6 +327,14 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.window_animations.cancel_all();
     }
 
+    private should_animate_window(window: Window.ShellWindow): boolean {
+        return this.animate_windows && !this.init && !window.grab && this.grab_op === null &&
+            !overview.visible && !sessionMode.isLocked && !window.meta.minimized &&
+            !window.is_maximized() && !window.meta.is_fullscreen() && window.same_workspace() &&
+            !window.reassignment && this.displays_updating === null && this.workareas_update === null &&
+            GLib.get_monotonic_time() >= this.animations_suppressed_until;
+    }
+
     /** Registers a generic callback to be executed in the event loop. */
     register_fn(callback: () => void, name?: string) {
         this.register({ tag: 1, callback, name });
@@ -359,12 +367,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                         return;
                     }
 
-                    const animate = this.animate_windows && !this.init && !win.grab && this.grab_op === null &&
-                        !overview.visible && !sessionMode.isLocked && !win.meta.minimized &&
-                        !win.is_maximized() && !win.meta.is_fullscreen() && win.same_workspace() &&
-                        !win.reassignment && this.displays_updating === null && this.workareas_update === null &&
-                        GLib.get_monotonic_time() >= this.animations_suppressed_until;
-                    this.window_animations.move(window, movement, animate);
+                    this.window_animations.move(window, movement, this.should_animate_window(window));
 
                     this.monitors.insert(window.entity, [win.meta.get_monitor(), win.workspace_id()]);
 
@@ -910,8 +913,13 @@ export class Ext extends Ecs.System<ExtEvent> {
         });
     }
 
-    on_destroy(win: Entity) {
-        // Exit tiling adjustment mode on window destroy.
+    on_unmanaged(win: Entity) {
+        const window = this.windows.get(win);
+        if (!window || window.destroying) return;
+
+        // Reflow before focus changes; the actor outlives the window during Shell's close effect.
+        window.destroying = true;
+
         if (this.tiler.window !== null && win == this.tiler.window) this.tiler.exit(this);
 
         const [prev_a, prev_b] = this.prev_focused;
@@ -923,12 +931,8 @@ export class Ext extends Ecs.System<ExtEvent> {
             this.prev_focused[0] = null;
         }
 
-        const window = this.windows.get(win);
-        if (!window) return;
-
         const stack = window.stack;
 
-        window.destroying = true;
         this.window_animations.cancel(window);
 
         // Disconnect all signals on this window
@@ -952,7 +956,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         if (this.auto_tiler) this.auto_tiler.detach_window(this, win);
 
-        // If destroyed window belonged to a stack, ensure that the next window
+        // If the closing window belonged to a stack, ensure that the next window
         // to be focused is also a window in the same stack
         if (this.auto_tiler && stack !== null) {
             const stack_object = this.auto_tiler.forest.stacks.get(stack);
@@ -970,8 +974,6 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
 
         this.movements.remove(win);
-        this.windows.remove(win);
-        this.delete_entity(win);
     }
 
     on_display_move(_from_id: number, _to_id: number) {
@@ -1876,13 +1878,20 @@ export class Ext extends Ecs.System<ExtEvent> {
         let win = this.get_window(window);
         if (win) {
             const entity = win.entity;
+            // At unmanaged, get_compositor_private() may already be null, so connect_meta would skip cleanup.
+            this.window_signals.get_or(entity, () => []).push(
+                window.connect('unmanaged', () => this.on_unmanaged(entity)),
+            );
             actor.connect('destroy', () => {
                 if (win && win.border) {
                     win.border.destroy();
                     win.border = null;
                 }
 
-                this.on_destroy(entity);
+                this.on_unmanaged(entity);
+                // Retain the component until the actor dies so late events cannot recreate it.
+                this.windows.remove(entity);
+                this.delete_entity(entity);
 
                 return false;
             });
@@ -2087,8 +2096,9 @@ export class Ext extends Ecs.System<ExtEvent> {
         });
 
         this.connect(wim, 'kill-window-effects', (_, actor) => {
+            const meta = actor.get_meta_window();
             for (const window of this.windows.values()) {
-                if (window.meta === actor.get_meta_window()) {
+                if (window.meta === meta) {
                     this.window_animations.cancel(window);
                     break;
                 }
