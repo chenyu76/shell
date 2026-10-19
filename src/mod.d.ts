@@ -294,6 +294,7 @@ declare namespace Meta {
 
         activate(time: number): void;
         change_workspace_by_index(workspace: number, append: boolean): void;
+        client_rect_to_frame_rect(rect: Rectangular): Rectangular;
         delete(timestamp: number): void;
         get_buffer_rect(): Rectangular;
         get_compositor_private(): Meta.WindowActor | null;
@@ -301,6 +302,7 @@ declare namespace Meta {
         get_description(): string;
         get_frame_rect(): Rectangular;
         get_monitor(): number;
+        get_min_size?(): [boolean, number, number];
         get_pid(): number;
         get_role(): null | string;
         get_stable_sequence(): number;

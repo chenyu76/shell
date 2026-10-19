@@ -441,7 +441,9 @@ export class Stack {
     }
 
     private move_window(window: ShellWindow, rect: Rectangular) {
-        const current = window.rect();
+        // Moves are queued. A matching frame may still have a pending move away
+        // from this slot, which must be replaced when focus switches back.
+        const current = this.ext.movements.get(window.entity) ?? window.rect();
 
         if (
             current.x === rect.x &&

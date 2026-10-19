@@ -27,6 +27,7 @@ const ext = Object.assign(new World(), {
     monitor_work_area: monitor => new Rectangle([monitor * 1000, 0, 1000, 800]),
     active_workspace: () => 0,
     window_animations: { visual_rect: (window, fallback) => fallback ?? window.rect() },
+    movements: { get: () => null },
     connect_window() {},
     size_signals_block(window) { this.add_tag(window.entity, Tags.Blocked); },
     size_signals_unblock(window) { this.delete_tag(window.entity, Tags.Blocked); },

@@ -91,7 +91,7 @@ function make_ext(offsets, titled = new Array()) {
         show_border_on_focused: () => {},
         active_workspace: () => 0,
         register: () => {},
-        movements: { insert: () => {} },
+        movements: { insert: () => {}, get: () => null },
     };
 }
 
@@ -224,6 +224,31 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     const rects_before = windows.map((w) => JSON.stringify(w.state.rect));
     stack.activate(stack.display[stack.display.length - 1]);
     check('re-activating the window in front is a no-op', order() === before && windows.every((w, i) => JSON.stringify(w.state.rect) === rects_before[i]));
+}
+
+// --- switching again before queued movement has run -----------------------------
+{
+    const { stack, windows, ext } = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    const pending = new Map();
+    ext.movements = { get: entity => pending.get(entity) ?? null };
+    for (const window of windows) {
+        window.move = (_ext, target) => pending.set(window.entity, { ...target });
+    }
+
+    // ShellWindow.move queues requests; frame rects still describe the old pile.
+    // Return focus to the original front before either move has been applied.
+    stack.activate(windows[0].entity);
+    stack.activate(windows[2].entity);
+    for (const [entity, rect] of pending) ext.windows.get(entity).state.rect = rect;
+
+    check(
+        'switching back before movement runs keeps every window in its final slot',
+        stack.display.every((entity, index) => {
+            const rect = ext.windows.get(entity).rect();
+            return rect.x === AREA.x + index * 32 && rect.y === AREA.y + index * 32;
+        }),
+        stack.display.map(entity => `${name_of(windows, entity)}:${ext.windows.get(entity).rect().x}`).join(','),
+    );
 }
 
 // --- cycling through a stack with the direction keys ---------------------------

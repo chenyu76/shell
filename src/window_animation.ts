@@ -75,6 +75,22 @@ export class WindowAnimations {
     move(window: ShellWindow, target: Rectangular, enabled: boolean) {
         const meta = window.meta;
         const before = meta.get_frame_rect();
+        const minimum = meta.get_min_size?.();
+        if (minimum?.[0]) {
+            // Convert client size hints to frame geometry: include server-side
+            // borders and exclude client-side shadows.
+            const client = meta.get_frame_rect();
+            client.width = minimum[1];
+            client.height = minimum[2];
+            const frame = meta.client_rect_to_frame_rect(client);
+            // Mutter can drop the move as well as the resize when a Wayland
+            // request is below the minimum and the client is already that size.
+            target = {
+                x: target.x, y: target.y,
+                width: minimum[1] > 0 ? Math.max(target.width, frame.width) : target.width,
+                height: minimum[2] > 0 ? Math.max(target.height, frame.height) : target.height,
+            };
+        }
 
         try {
             this.prepare(window, before, target, enabled);

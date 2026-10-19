@@ -700,9 +700,10 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         let new_work;
 
-        if (id + 1 === wom.get_n_workspaces()) {
-            id += 1;
-            new_work = wom.append_new_workspace(true, global.get_current_time());
+        if (id >= wom.get_n_workspaces()) {
+            // Monitor migrations run in the background. Activating a workspace
+            // here can start a switch before Shell's workspace views are ready.
+            new_work = wom.append_new_workspace(false, global.get_current_time());
         } else {
             new_work = wom.get_workspace_by_index(id);
         }

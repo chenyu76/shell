@@ -49,11 +49,14 @@ The full-extension close/focus regression can also run in an isolated headless G
 
 ```
 python3 scripts/pile-close-runtime-check.py
+python3 scripts/constrained-window-runtime-check.py
 ```
 
 This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
 It supplies the queued focus change explicitly because the headless session has no interactive seat,
 and checks that closing the front of a pile leaves each survivor's frame origin fixed during one resize.
+The constrained-window check verifies that a Wayland window already at its minimum size still moves
+when the requested tile is smaller, with animations enabled and disabled.
 
 - [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
 - [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.

@@ -116,6 +116,62 @@ check('real movement errors propagate unchanged and release animation resources'
     s.assert_clean();
 });
 
+for (const enabled of [false, true]) {
+    check(`a minimum-sized window still moves when asked to shrink below its minimum (animation=${enabled})`, () => {
+        const s = scenario();
+        s.meta.get_min_size = () => [true, BEFORE.width, BEFORE.height];
+        s.meta.client_rect_to_frame_rect = rect => rect;
+        const resize = s.meta.move_resize_frame;
+        s.meta.move_resize_frame = (userOp, x, y, width, height) => {
+            // Real Mutter drops the whole operation in this case, including x/y.
+            if (width < BEFORE.width || height < BEFORE.height) return;
+            resize(userOp, x, y, width, height);
+        };
+        const target = { ...TARGET, width: 250, height: 200 };
+        s.animations.move(s.window, target, enabled);
+        const expected = { ...TARGET, width: BEFORE.width, height: BEFORE.height };
+        rectEqual(s.meta.get_frame_rect(), expected);
+        assert.equal(s.submitted(), 1);
+        assert.equal(target.width, 250, 'The caller still owns its requested layout');
+        mocks.redraw();
+        if (enabled) {
+            assert.equal(s.actor.easeCalls, 1, 'A clamped position-only move must not wait for a resize');
+            s.actor.complete();
+        }
+        mocks.redraw();
+        s.assert_clean();
+    });
+}
+
+check('minimum client sizes include server-side frame borders', () => {
+    const s = scenario();
+    s.meta.get_min_size = () => [true, 400, 300];
+    s.meta.client_rect_to_frame_rect = rect => ({ ...rect, width: rect.width + 10, height: rect.height + 30 });
+    s.animations.move(s.window, { ...TARGET, width: 200, height: 100 }, false);
+    rectEqual(s.meta.get_frame_rect(), { ...TARGET, width: 410, height: 330 });
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('unknown minimum sizes leave compositor constraints in charge', () => {
+    const s = scenario();
+    s.meta.get_min_size = () => [false, 0, 0];
+    s.animations.move(s.window, TARGET, false);
+    rectEqual(s.meta.get_frame_rect(), TARGET);
+    mocks.redraw();
+    s.assert_clean();
+});
+
+check('minimum client sizes exclude client-side shadows', () => {
+    const s = scenario({ shadow: 12 });
+    s.meta.get_min_size = () => [true, BEFORE.width + 24, BEFORE.height + 24];
+    s.meta.client_rect_to_frame_rect = rect => ({ ...rect, width: rect.width - 24, height: rect.height - 24 });
+    s.animations.move(s.window, { ...TARGET, width: 200, height: 100 }, false);
+    rectEqual(s.meta.get_frame_rect(), { ...TARGET, width: BEFORE.width, height: BEFORE.height });
+    mocks.redraw();
+    s.assert_clean();
+});
+
 check('Wayland waits for both geometry and the actor allocation, using constrained geometry', () => {
     const s = scenario({ async: true });
     s.animations.move(s.window, TARGET, true);
