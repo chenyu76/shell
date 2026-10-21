@@ -1603,6 +1603,13 @@ export class Ext extends Ecs.System<ExtEvent> {
 
                 this.grab_op = new GrabOp.GrabOp(entity, rect);
 
+                // Focus may have queued a pile swap before the native grab
+                // started. Drop that geometry; restore the latest order on release.
+                const stack = win.stack === null ? null : this.auto_tiler?.forest.stacks.get(win.stack);
+                if (stack) {
+                    for (const member of stack.entities) this.movements.remove(member);
+                }
+
                 this.size_signals_block(win);
 
                 /** Display an overlay indicating where the window will be placed if dropped */
@@ -2561,6 +2568,18 @@ export class Ext extends Ecs.System<ExtEvent> {
             let window = this.windows.get(this.grab_op.entity);
             if (window) this.size_signals_unblock(window);
             this.grab_op = null;
+
+            const index = window?.stack;
+            if (index !== null && index !== undefined) {
+                const stack = this.auto_tiler?.forest.stacks.get(index);
+                // Even a titlebar click with zero movement can have changed the
+                // front window. Wait until Mutter has finished releasing its grab.
+                if (stack) {
+                    this.register_fn(() => {
+                        if (this.auto_tiler?.forest.stacks.get(index) === stack) stack.restack();
+                    });
+                }
+            }
         }
 
         this.moved_by_mouse = false;

@@ -251,6 +251,32 @@ const name_of = (windows, entity) => windows.find((w) => w.entity === entity).na
     );
 }
 
+// --- focus changes while a pile member is grabbed -------------------------------
+{
+    const { stack, windows, ext } = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    const before = windows.map(window => JSON.stringify(window.state.rect));
+    for (const window of windows) window.state.moves.length = 0;
+    ext.grab_op = { entity: windows[0].entity };
+    stack.activate(windows[0].entity);
+    check('focus during a grab records the new front window', stack.active === windows[0].entity);
+    check(
+        'focus during a grab defers the whole pile arrangement',
+        windows.every((window, index) => window.state.moves.length === 0 && JSON.stringify(window.state.rect) === before[index]),
+    );
+    // A second layout request must also wait for the same grab to finish.
+    stack.update_layout(stack.entities, AREA);
+    check('rebuilding a grabbed pile does not move its members', windows.every(window => window.state.moves.length === 0));
+    ext.grab_op = null;
+    stack.restack();
+    check(
+        'after release, the remembered front and all exposed strips are restored',
+        stack.display.every((entity, index) => {
+            const rect = ext.windows.get(entity).rect();
+            return rect.x === AREA.x + index * 32 && rect.y === AREA.y + index * 32;
+        }) && stack.display.at(-1) === windows[0].entity,
+    );
+}
+
 // --- cycling through a stack with the direction keys ---------------------------
 {
     const { stack, windows } = scenario([32, 32], AREA, ['a', 'b', 'c']);

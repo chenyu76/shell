@@ -50,6 +50,7 @@ The full-extension close/focus regression can also run in an isolated headless G
 ```
 python3 scripts/pile-close-runtime-check.py
 python3 scripts/constrained-window-runtime-check.py
+python3 scripts/pile-grab-runtime-check.py
 ```
 
 This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
@@ -57,6 +58,10 @@ It supplies the queued focus change explicitly because the headless session has 
 and checks that closing the front of a pile leaves each survivor's frame origin fixed during one resize.
 The constrained-window check verifies that a Wayland window already at its minimum size still moves
 when the requested tile is smaller, with animations enabled and disabled.
+The grab check delivers focus/grab callbacks explicitly in the headless session and verifies real
+window geometry for six scenarios: queued focus swaps, clicks without displacement, short drags,
+keyboard movement and resizing. It checks that the whole pile waits during the grab and is restored
+after release; it does not simulate physical mouse input.
 
 - [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
 - [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.
@@ -112,6 +117,8 @@ when the requested tile is smaller, with animations enabled and disabled.
 - [ ] Full-screen an application within the stack, then quit the application-- the remaining windows should be visible.
 - [ ] Every window of the stack is visible as a cascading pile, and the entire pile fits inside of the stack's area.
 - [ ] Clicking a window of the stack displays it completely, in front of the other windows of the stack.
+- [ ] Press and hold the exposed title bar of a background window, then release without dragging: the clicked window ends in front and every other window retains an exposed edge.
+- [ ] Repeat for the back, middle and front windows, including quick clicks and slight drags within the dead zone, with both Wayland and XWayland applications.
 - [ ] A stack which has windows to its left or right is cycled with `Super` + `Up`/`Down`, while `Super` + `Left`/`Right` moves focus between the tiles.
 - [ ] A stack which has windows above or below it is cycled with `Super` + `Left`/`Right`, while `Super` + `Up`/`Down` moves focus between the tiles.
 - [ ] A stack which has windows both beside it and above or below it is not cycled, and every direction key moves focus between the tiles.

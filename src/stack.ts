@@ -412,6 +412,9 @@ export class Stack {
     /** Moves the windows of the stack into their cascaded positions */
     private arrange() {
         if (this.arranging || this.display.length === 0) return;
+        // Keep the whole pile still while Mutter owns one member's geometry.
+        // Focus can update the display order; grab cleanup arranges it on release.
+        if (this.is_dragged()) return;
         if (this.rect.width <= 0 || this.rect.height <= 0) return;
 
         this.arranging = true;
