@@ -1,29 +1,9 @@
 #!/usr/bin/env python3
 """Run after make compile; requires GNOME Shell with headless Wayland support."""
 
-import json
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import sys
-import tempfile
+from runtime_check import run
 
-
-CLIENT = """
-import Gtk from 'gi://Gtk?version=4.0';
-import GLib from 'gi://GLib';
-Gtk.init();
-const windows = ['Pile A', 'Pile B', 'Pile C'].map(title => {
-    const window = new Gtk.Window({title, default_width: 420, default_height: 310});
-    window.set_child(new Gtk.Label({label: title}));
-    window.present();
-    return window;
-});
-const loop = new GLib.MainLoop(null, false);
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => { loop.quit(); return false; });
-loop.run();
-"""
 
 CHECK = """
 import GLib from 'gi://GLib';
@@ -124,58 +104,6 @@ export default class PileCloseCheck extends Extension {
 """
 
 
-def run_session(root):
-    for schema, key, value in [
-        ('org.gnome.shell', 'enabled-extensions', "['pop-shell@system76.com', 'pile-close-check@local']"),
-        ('org.gnome.shell', 'disable-user-extensions', 'false'),
-        ('org.gnome.shell.extensions.pop-shell', 'tile-by-default', 'false'),
-        ('org.gnome.mutter', 'dynamic-workspaces', 'false'),
-    ]:
-        subprocess.run(['gsettings', 'set', schema, key, value], check=True)
-    result = subprocess.run(
-        ['timeout', '14s', 'gnome-shell', '--headless', '--wayland', '--no-x11',
-         '--wayland-display', 'pile-check', '--virtual-monitor', '1280x900'],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    log = root / 'shell.log'
-    log.write_text(result.stdout)
-    print(f'GNOME log: {log}')
-    failures = [line for line in result.stdout.splitlines()
-                if 'JS ERROR' in line or 'Window animation unavailable' in line]
-    for line in failures:
-        print(line)
-    if failures or result.stdout.count('[pile-close-check] PASS') != 2:
-        raise SystemExit('FAIL: close/focus/resize regression; inspect the GNOME log')
-    print('PASS: pile 3 -> 2 -> 1; queued focus changes produce one resize per survivor with fixed frame origins')
-
-
-def main():
-    if len(sys.argv) > 1:
-        run_session(Path(sys.argv[1]))
-        return
-    build = Path(__file__).resolve().parents[1] / '_build'
-    root = Path(tempfile.mkdtemp(prefix='pop-shell-pile-close-'))
-    (root / 'runtime').mkdir(mode=0o700)
-    extensions = root / 'data/gnome-shell/extensions'
-    extension = extensions / 'pop-shell@system76.com'
-    shutil.copytree(build, extension)
-    test = extensions / 'pile-close-check@local'
-    test.mkdir()
-    test.joinpath('metadata.json').write_text(json.dumps({
-        'uuid': test.name, 'name': 'Pile close regression check',
-        'description': 'Isolated full-extension close and focus test',
-        'shell-version': json.loads(build.joinpath('metadata.json').read_text())['shell-version'],
-    }))
-    test.joinpath('extension.js').write_text(CHECK)
-    client = root / 'client.js'
-    client.write_text(CLIENT)
-    env = dict(os.environ, GSETTINGS_BACKEND='keyfile', GTK_A11Y='none', LIBGL_ALWAYS_SOFTWARE='1',
-               GSETTINGS_SCHEMA_DIR=str(extension / 'schemas'), WAYLAND_DISPLAY='pile-check',
-               PILE_CHECK_CLIENT=str(client),
-               **{f'XDG_{name.upper()}_HOME': str(root / name) for name in ['config', 'data', 'cache', 'state']})
-    env['XDG_RUNTIME_DIR'] = str(root / 'runtime')
-    subprocess.run(['dbus-run-session', '--', sys.executable, __file__, str(root)], env=env, check=True)
-
-
 if __name__ == '__main__':
-    main()
+    run(Path(__file__).with_name('pile-runtime-client.mjs').read_text(), CHECK, 'pile-close-check', 2,
+        seconds=14, full_extension=True)

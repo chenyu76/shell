@@ -12,37 +12,19 @@ journalctl -o cat -n 0 -f "$(which gnome-shell)" | grep -v warning
 
 Note that because the logs are from GNOME Shell, there will be messages from all installed extensions, and GNOME Shell itself. Pop Shell is fairly chatty though, so the majority of the logs should be from Pop Shell. Pop Shell logs are usually prepended with `pop-shell:`, but sometimes GNOME has internal errors and warnings surrounding those logs that could be useful for pointing to an issue that we can resolve in Pop Shell.
 
-## Checklists
+## Automated checks
 
-Tasks for a tester to verify when approving a patch. Use complex window layouts and at least two displays. Turn on active hint during testing.
-
-### Panel menu and preferences
+Build once, then run the compositor-independent regression checks:
 
 ```
 make compile
+node scripts/stack-cascade-check.mjs
+node scripts/window-animation-check.mjs
 node scripts/reset-windows-check.mjs
 ```
 
-- [ ] The panel menu contains **Reset Windows** and **Preferences**; Active Hint and gap controls are available only in Preferences.
-- [ ] Reset Windows collects the current workspace's ordinary application windows into one pile on the focused window's monitor. Floating, minimized, maximized and fullscreen windows are included; dialogs and windows pinned to all workspaces are left alone.
-- [ ] The previously focused window remains in front. Other workspaces keep their layouts, including their piles.
-- [ ] Resetting with tiling disabled enables tiling without rearranging other workspaces. Repeating a reset, or resetting an empty workspace, is harmless.
-- [ ] Preferences retains the saved Active Hint switch, border radius and color, including alpha. Changes apply immediately to the shell, and the radius remains within 0–30 pixels.
-- [ ] The color chooser is part of Preferences, and the preferences window scrolls to reach every setting.
-
-### Window movement animations
-
-Build and run the compositor-independent checks:
-
-```
-make compile
-node scripts/window-animation-check.mjs
-node scripts/stack-cascade-check.mjs
-```
-
-The animation checks cover asynchronous Wayland geometry and actor updates, constrained sizes,
-merged requests, interruption and retargeting, system motion settings, native effects, and resource cleanup.
-They do not validate actual rendering; run the following checks in a separate GNOME test session.
+These cover pile geometry, focus and grab ordering, title lifecycle, workspace-isolated reset,
+and animation timing, constraints and cleanup. They do not validate actual rendering.
 
 The full-extension close/focus regression can also run in an isolated headless GNOME session
 (requires GNOME Shell headless Wayland support, GJS and GTK 4):
@@ -62,6 +44,21 @@ The grab check delivers focus/grab callbacks explicitly in the headless session 
 window geometry for six scenarios: queued focus swaps, clicks without displacement, short drags,
 keyboard movement and resizing. It checks that the whole pile waits during the grab and is restored
 after release; it does not simulate physical mouse input.
+
+## Checklists
+
+Tasks for a tester to verify when approving a patch. Use complex window layouts and at least two displays. Turn on active hint during testing.
+
+### Panel menu and preferences
+
+- [ ] The panel menu contains **Reset Windows** and **Preferences**; Active Hint and gap controls are available only in Preferences.
+- [ ] Reset Windows collects the current workspace's ordinary application windows into one pile on the focused window's monitor. Floating, minimized, maximized and fullscreen windows are included; dialogs and windows pinned to all workspaces are left alone.
+- [ ] The previously focused window remains in front. Other workspaces keep their layouts, including their piles.
+- [ ] Resetting with tiling disabled enables tiling without rearranging other workspaces. Repeating a reset, or resetting an empty workspace, is harmless.
+- [ ] Preferences retains the saved Active Hint switch, border radius and color, including alpha. Changes apply immediately to the shell, and the radius remains within 0–30 pixels.
+- [ ] The color chooser is part of Preferences, and the preferences window scrolls to reach every setting.
+
+### Window movement animations
 
 - [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
 - [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.
@@ -123,11 +120,9 @@ after release; it does not simulate physical mouse input.
 - [ ] A stack which has windows above or below it is cycled with `Super` + `Left`/`Right`, while `Super` + `Up`/`Down` moves focus between the tiles.
 - [ ] A stack which has windows both beside it and above or below it is not cycled, and every direction key moves focus between the tiles.
 - [ ] Cycling brings every window of the stack to the front in turn, forwards with `Right`/`Down` and backwards with `Left`/`Up`.
-- [ ] Once every window of the stack has been displayed in front, the next press displays the windows again from the start.
 - [ ] The direction keys which move focus between the tiles land on the window which the neighbouring stack displays in front, and never on the window behind it.
 - [ ] A stack which fills the display is still cycled by every direction key, as there is no tile to move focus to.
 - [ ] Focus can still be shifted out of a stack which holds a single window.
-- [ ] Cycling a stack which fills the display keeps displaying the next window, since there is no window to shift focus to.
 - [ ] Changing the stack offsets in the preferences re-arranges the stacks, and a value of `0` displays the windows on top of one another.
 - [ ] Adding and removing windows from a stack does not scramble the order of the pile.
 
@@ -143,12 +138,6 @@ after release; it does not simulate physical mouse input.
 - [ ] A window whose title changes updates the drawn title.
 - [ ] The drawn titles are hidden by a window which is dragged, by a fullscreen window in the stack, and by switching to another workspace.
 - [ ] The rules of "Window Titles in Piles" are kept when the Floating Window Exceptions editor saves the configuration.
-
-The arrangement of a stack can additionally be checked without a running shell:
-
-```
-make compile && node scripts/stack-cascade-check.mjs
-```
 
 ### Workspaces
 

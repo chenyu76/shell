@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """After make compile, verify minimum-sized Wayland windows in isolated GNOME."""
 
-import importlib.util
-from pathlib import Path
-import subprocess
-import sys
+from runtime_check import run
 
 
 CLIENT = """
@@ -83,36 +80,6 @@ export default class MinimumSizeCheck extends Extension {
 """
 
 
-def run_session(root):
-    # Only the test extension is enabled; it imports the real movement controller.
-    subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions',
-                    "['pile-close-check@local']"], check=True)
-    subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'disable-user-extensions', 'false'], check=True)
-    result = subprocess.run(
-        ['timeout', '10s', 'gnome-shell', '--headless', '--wayland', '--no-x11',
-         '--wayland-display', 'pile-check', '--virtual-monitor', '1280x900'],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    log = root / 'shell.log'
-    log.write_text(result.stdout)
-    print(f'GNOME log: {log}')
-    failures = [line for line in result.stdout.splitlines()
-                if 'JS ERROR' in line or 'Window animation unavailable' in line]
-    for line in failures:
-        print(line)
-    if failures or result.stdout.count('[minimum-size-check] PASS') != 4:
-        raise SystemExit('FAIL: minimum-sized window movement; inspect the GNOME log')
-    print('PASS: minimum-sized Wayland windows move with/without CSD and with animations enabled/disabled')
-
-
 if __name__ == '__main__':
-    # Reuse the private D-Bus/XDG session and build-copy setup of the close check.
-    sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location('pile_check', Path(__file__).with_name('pile-close-runtime-check.py'))
-    harness = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(harness)
-    harness.__file__ = __file__
-    harness.CLIENT = CLIENT
-    harness.CHECK = CHECK
-    harness.run_session = run_session
-    harness.main()
+    run(CLIENT, CHECK, 'minimum-size-check', 4,
+        seconds=10, full_extension=False)

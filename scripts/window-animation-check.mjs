@@ -143,34 +143,22 @@ for (const enabled of [false, true]) {
     });
 }
 
-check('minimum client sizes include server-side frame borders', () => {
-    const s = scenario();
-    s.meta.get_min_size = () => [true, 400, 300];
-    s.meta.client_rect_to_frame_rect = rect => ({ ...rect, width: rect.width + 10, height: rect.height + 30 });
-    s.animations.move(s.window, { ...TARGET, width: 200, height: 100 }, false);
-    rectEqual(s.meta.get_frame_rect(), { ...TARGET, width: 410, height: 330 });
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('unknown minimum sizes leave compositor constraints in charge', () => {
-    const s = scenario();
-    s.meta.get_min_size = () => [false, 0, 0];
-    s.animations.move(s.window, TARGET, false);
-    rectEqual(s.meta.get_frame_rect(), TARGET);
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('minimum client sizes exclude client-side shadows', () => {
-    const s = scenario({ shadow: 12 });
-    s.meta.get_min_size = () => [true, BEFORE.width + 24, BEFORE.height + 24];
-    s.meta.client_rect_to_frame_rect = rect => ({ ...rect, width: rect.width - 24, height: rect.height - 24 });
-    s.animations.move(s.window, { ...TARGET, width: 200, height: 100 }, false);
-    rectEqual(s.meta.get_frame_rect(), { ...TARGET, width: BEFORE.width, height: BEFORE.height });
-    mocks.redraw();
-    s.assert_clean();
-});
+for (const [name, minimum, border, shadow, expected] of [
+    ['server borders', [true, 400, 300], [10, 30], 0, [410, 330]],
+    ['client shadows', [true, 424, 324], [-24, -24], 12, [400, 300]],
+    ['unknown minimum', [false, 0, 0], [0, 0], 0, [200, 100]],
+]) {
+    check(`minimum frame size accounts for ${name}`, () => {
+        const s = scenario({ shadow });
+        s.meta.get_min_size = () => minimum;
+        s.meta.client_rect_to_frame_rect = rect => ({ ...rect,
+            width: rect.width + border[0], height: rect.height + border[1] });
+        s.animations.move(s.window, { ...TARGET, width: 200, height: 100 }, false);
+        rectEqual(s.meta.get_frame_rect(), { ...TARGET, width: expected[0], height: expected[1] });
+        mocks.redraw();
+        s.assert_clean();
+    });
+}
 
 check('Wayland waits for both geometry and the actor allocation, using constrained geometry', () => {
     const s = scenario({ async: true });
@@ -187,16 +175,6 @@ check('Wayland waits for both geometry and the actor allocation, using constrain
     s.actor.complete();
     rectEqual(s.animations.visual_rect(s.window), constrained);
     assert.equal(s.submitted(), 1);
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('unresponsive or rejected configure restores the real window after the timeout', () => {
-    const s = scenario({ async: true });
-    s.animations.move(s.window, TARGET, true);
-    assert.equal([...mocks.timers.values()][0].delay, 500);
-    mocks.redraw();
-    mocks.timeout();
     mocks.redraw();
     s.assert_clean();
 });
@@ -224,42 +202,32 @@ check('continuous movement retargets from the currently displayed frame', () => 
     s.assert_clean();
 });
 
-check('rapid movement can also replace a pending Wayland configure', () => {
-    const s = scenario({ async: true });
-    s.animations.move(s.window, TARGET, true);
-    s.animations.move(s.window, { ...TARGET, x: 900 }, true);
-    assert.equal(s.group.children.length, 2);
-    s.commit();
-    mocks.redraw();
-    rectEqual(s.animations.visual_rect(s.window), BEFORE);
-    s.animations.cancel_all();
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('same-frame requests reuse one snapshot and animate only the final geometry', () => {
-    const s = scenario();
-    s.animations.move(s.window, { ...BEFORE, x: TARGET.x, y: TARGET.y }, true);
-    const clone = s.group.children[1];
-    const signals = [...s.actor.signals.keys()];
-    const timeout = [...mocks.timers.keys()];
-    const final = { ...TARGET, x: 900, width: 700 };
-    s.animations.move(s.window, { ...TARGET, x: 800 }, true);
-    s.animations.move(s.window, final, true);
-    assert.equal(s.group.children[1], clone);
-    assert.deepEqual([...s.actor.signals.keys()], signals);
-    assert.deepEqual([...mocks.timers.keys()], timeout);
-    assert.equal(s.actor.easeCalls, 0);
-    assert.equal(s.submitted(), 3);
-    mocks.redraw();
-    assert.equal(s.actor.easeCalls, 1);
-    assert.equal(clone.easeCalls, 1);
-    rectEqual(s.animations.visual_rect(s.window), BEFORE);
-    s.actor.complete();
-    rectEqual(s.animations.visual_rect(s.window), final);
-    mocks.redraw();
-    s.assert_clean();
-});
+for (const async of [false, true]) {
+    check(`same-frame requests merge into the final geometry (async=${async})`, () => {
+        const s = scenario({ async });
+        s.animations.move(s.window, { ...BEFORE, x: TARGET.x, y: TARGET.y }, true);
+        const clone = s.group.children[1];
+        const signals = [...s.actor.signals.keys()];
+        const timeout = [...mocks.timers.keys()];
+        const final = { ...TARGET, x: 900, width: 700 };
+        s.animations.move(s.window, { ...TARGET, x: 800 }, true);
+        s.animations.move(s.window, final, true);
+        assert.equal(s.group.children[1], clone);
+        assert.deepEqual([...s.actor.signals.keys()], signals);
+        assert.deepEqual([...mocks.timers.keys()], timeout);
+        assert.equal(s.actor.easeCalls, 0);
+        assert.equal(s.submitted(), 3);
+        if (async) s.commit();
+        mocks.redraw();
+        assert.equal(s.actor.easeCalls, 1);
+        assert.equal(clone.easeCalls, 1);
+        rectEqual(s.animations.visual_rect(s.window), BEFORE);
+        s.actor.complete();
+        rectEqual(s.animations.visual_rect(s.window), final);
+        mocks.redraw();
+        s.assert_clean();
+    });
+}
 
 check('a move arriving before a resize waits and transitions both together', () => {
     const s = scenario({ async: true, shadow: 12 });
@@ -278,18 +246,6 @@ check('a move arriving before a resize waits and transitions both together', () 
     s.actor.advance(0.5);
     rectEqual(s.animations.visual_rect(s.window), { x: 350, y: 150, width: 500, height: 350 });
     s.actor.complete();
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('position-only requests start on the next redraw without waiting for a resize', () => {
-    const s = scenario();
-    const target = { ...BEFORE, x: 600, y: 200 };
-    s.animations.move(s.window, target, true);
-    mocks.redraw();
-    assert.equal(s.actor.easeCalls, 1);
-    s.actor.complete();
-    rectEqual(s.animations.visual_rect(s.window), target);
     mocks.redraw();
     s.assert_clean();
 });
@@ -318,12 +274,14 @@ for (const anchor of ['top-left', 'bottom-right']) {
     });
 }
 
-check('duplicate requests preserve the pending snapshot and its original timeout', () => {
+check('unresponsive configure times out even after duplicate requests', () => {
     const s = scenario({ async: true });
     s.animations.move(s.window, TARGET, true);
     const clone = s.group.children[1];
     const timeout = [...mocks.timers.keys()];
+    assert.equal([...mocks.timers.values()][0].delay, 500);
     mocks.redraw();
+    assert.equal(s.actor.animation, null);
     mocks.tick(450_000);
     s.animations.move(s.window, TARGET, true);
     assert.equal(s.group.children[1], clone);
@@ -369,22 +327,10 @@ check('repeated requests preserve a running transition to constrained geometry',
     s.animations.move(s.window, TARGET, true);
     assert.equal(s.actor.animation, animation);
     assert.equal(s.actor.easeCalls, 1);
+    s.meta.emit('size-changed');
+    assert.equal(s.actor.animation, animation);
     rectEqual(s.animations.visual_rect(s.window), visual);
     s.actor.complete();
-    mocks.redraw();
-    s.assert_clean();
-});
-
-check('duplicate boxed geometry notifications preserve an existing transition', () => {
-    const s = scenario();
-    s.animations.move(s.window, TARGET, true);
-    mocks.redraw();
-    const animation = s.actor.animation;
-    s.animations.move(s.window, TARGET, true);
-    assert.equal(s.actor.animation, animation);
-    s.meta.emit('size-changed');
-    assert.equal(s.group.children.length, 2);
-    s.animations.cancel_all();
     mocks.redraw();
     s.assert_clean();
 });
@@ -487,7 +433,7 @@ check('disabled moves and cancellation preserve unrelated native effects', () =>
     s.assert_clean();
 });
 
-check('one controller independently animates and cleans up multiple windows', () => {
+check('one controller handles independent windows and batches their layout per redraw', () => {
     const a = scenario();
     const b = scenario({ async: true, reset: false });
     a.animations.move(a.window, TARGET, true);
@@ -495,22 +441,9 @@ check('one controller independently animates and cleans up multiple windows', ()
     mocks.redraw();
     assert.ok(a.actor.animation);
     assert.equal(b.actor.animation, null);
-    a.animations.cancel(a.window);
     b.commit();
     mocks.redraw();
     assert.ok(b.actor.animation);
-    a.animations.cancel_all();
-    mocks.redraw();
-    a.assert_clean();
-    b.assert_clean();
-});
-
-check('property notifications from multiple windows produce one layout batch per redraw', () => {
-    const a = scenario();
-    const b = scenario({ reset: false });
-    a.animations.move(a.window, TARGET, true);
-    a.animations.move(b.window, TARGET, true);
-    mocks.redraw();
     mocks.redraw();
     const batches = a.layout_batches.length;
     a.actor.advance(0.5);
@@ -519,6 +452,8 @@ check('property notifications from multiple windows produce one layout batch per
     mocks.redraw();
     assert.equal(a.layout_batches.length, batches + 1);
     assert.deepEqual(new Set(a.layout_batches.at(-1)), new Set([a.window, b.window]));
+    a.animations.cancel(a.window);
+    assert.ok(b.actor.animation);
     a.animations.cancel_all();
     assert.equal(mocks.laters.size, 0);
     mocks.redraw();

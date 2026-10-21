@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """After make compile, exercise pile focus/grab callbacks in isolated GNOME."""
 
-import importlib.util
 from pathlib import Path
-import subprocess
-import sys
+from runtime_check import run
 
 
 CHECK = """
@@ -125,37 +123,6 @@ export default class PileGrabCheck extends Extension {
 """
 
 
-def run_session(root):
-    for schema, key, value in [
-        ('org.gnome.shell', 'enabled-extensions', "['pop-shell@system76.com', 'pile-close-check@local']"),
-        ('org.gnome.shell', 'disable-user-extensions', 'false'),
-        ('org.gnome.shell.extensions.pop-shell', 'tile-by-default', 'false'),
-        ('org.gnome.mutter', 'dynamic-workspaces', 'false'),
-    ]:
-        subprocess.run(['gsettings', 'set', schema, key, value], check=True)
-    result = subprocess.run(
-        ['timeout', '16s', 'gnome-shell', '--headless', '--wayland', '--no-x11',
-         '--wayland-display', 'pile-check', '--virtual-monitor', '1280x900'],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    log = root / 'shell.log'
-    log.write_text(result.stdout)
-    print(f'GNOME log: {log}')
-    failures = [line for line in result.stdout.splitlines()
-                if 'JS ERROR' in line or 'Window animation unavailable' in line]
-    for line in failures:
-        print(line)
-    if failures or result.stdout.count('[pile-grab-check] PASS') != 6:
-        raise SystemExit('FAIL: pile grab/focus/release regression; inspect the GNOME log')
-    print('PASS: six pile grab/focus/release scenarios restore the final cascade')
-
-
 if __name__ == '__main__':
-    sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location('pile_check', Path(__file__).with_name('pile-close-runtime-check.py'))
-    harness = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(harness)
-    harness.__file__ = __file__
-    harness.CHECK = CHECK
-    harness.run_session = run_session
-    harness.main()
+    run(Path(__file__).with_name('pile-runtime-client.mjs').read_text(), CHECK, 'pile-grab-check', 6,
+        seconds=16, full_extension=True)
