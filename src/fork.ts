@@ -145,7 +145,6 @@ export class Fork {
 
                     closure = () => {
                         node.stack_replace(ext, inner, b);
-                        inner.entities[idx] = b.entity;
                     };
                 }
             }
@@ -170,10 +169,8 @@ export class Fork {
                 const inner_s = this.left.inner as node.NodeStack;
                 let idx = node.stack_find(inner_s, a.entity);
                 if (idx !== null) {
-                    const id = idx;
                     closure = () => {
                         node.stack_replace(ext, inner_s, b);
-                        inner_s.entities[id] = b.entity;
                     };
                 } else {
                     check_right();

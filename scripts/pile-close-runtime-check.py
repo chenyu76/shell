@@ -37,10 +37,21 @@ export default class PileCloseCheck extends Extension {
                 if (windows.length !== 3 || windows.some(meta => !meta.get_compositor_private()?.mapped)) return true;
                 Main.panel.statusArea['pop-shell'].menu._getMenuItems()
                     .find(item => item.label?.text === 'Reset Windows').activate(null);
-                later(1200, () => this.close_front(windows));
+                later(1200, () => this.rotate_and_close(windows));
                 return false;
             });
         });
+    }
+
+    rotate_and_close(windows) {
+        const ext = this.ext;
+        const stack = ext.auto_tiler.forest.stacks.get(ext.get_window(windows[0]).stack);
+        // Make display order differ from membership order before closing.
+        const entity = stack.cycle(false);
+        const front = ext.windows.get(entity);
+        front.activate(false);
+        ext.on_focused(front);
+        later(400, () => this.close_front(windows));
     }
 
     close_front(windows) {
@@ -91,7 +102,7 @@ export default class PileCloseCheck extends Extension {
                     return rect.width > before[index].width && rect.height > before[index].height;
                 }), 'Survivors did not expand');
                 console.log('[pile-close-check] PASS ' + survivors.length);
-                if (windows.length > 1) this.close_front(windows);
+                if (windows.length > 1) this.rotate_and_close(windows);
                 return false;
             });
         });

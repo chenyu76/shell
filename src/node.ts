@@ -34,15 +34,9 @@ export interface NodeWindow {
 export interface NodeStack {
     kind: 3;
     idx: number;
-    entities: Array<Entity>;
+    /** Borrows Stack.entities; the tree never owns a second membership order. */
+    readonly entities: ReadonlyArray<Entity>;
     rect: Rectangle | null;
-}
-
-function stack_detach(node: NodeStack, stack: Stack, idx: number) {
-    const entity = node.entities[idx];
-
-    node.entities.splice(idx, 1);
-    stack.remove(entity);
 }
 
 export function stack_find(node: NodeStack, entity: Entity): null | number {
@@ -55,61 +49,6 @@ export function stack_find(node: NodeStack, entity: Entity): null | number {
     }
 
     return null;
-}
-
-/** Move the window in a stack to the left, and detach if it it as the end. */
-export function stack_move_left(ext: Ext, forest: Forest, node: NodeStack, entity: Entity): boolean {
-    const stack = forest.stacks.get(node.idx);
-    if (!stack) return false;
-
-    let idx = 0;
-    for (const cmp of node.entities) {
-        if (Ecs.entity_eq(cmp, entity)) {
-            if (idx === 0) {
-                // Remove the window from the stack
-                stack_detach(node, stack, 0);
-                return false;
-            } else {
-                // Swap tabs in the stack
-                stack_swap(node, idx - 1, idx);
-                stack.active_id -= 1;
-                ext.auto_tiler?.update_stack(ext, node);
-                return true;
-            }
-        }
-
-        idx += 1;
-    }
-
-    return false;
-}
-
-/** Move the window in a stack to the right, and detach if it is at the end. */
-export function stack_move_right(ext: Ext, forest: Forest, node: NodeStack, entity: Entity): boolean {
-    const stack = forest.stacks.get(node.idx);
-    if (!stack) return false;
-
-    let moved = false;
-    let idx = 0;
-    const max = node.entities.length - 1;
-    for (const cmp of node.entities) {
-        if (Ecs.entity_eq(cmp, entity)) {
-            if (idx === max) {
-                stack_detach(node, stack, idx);
-                moved = false;
-            } else {
-                stack_swap(node, idx + 1, idx);
-                stack.active_id += 1;
-                ext.auto_tiler?.update_stack(ext, node);
-                moved = true;
-            }
-            break;
-        }
-
-        idx += 1;
-    }
-
-    return moved;
 }
 
 export function stack_replace(ext: Ext, node: NodeStack, window: ShellWindow) {
@@ -125,15 +64,7 @@ export function stack_replace(ext: Ext, node: NodeStack, window: ShellWindow) {
 export function stack_remove(forest: Forest, node: NodeStack, entity: Entity): null | number {
     const stack = forest.stacks.get(node.idx);
     if (!stack) return null;
-    const idx = stack.remove(entity);
-    if (idx !== null) node.entities.splice(idx, 1);
-    return idx;
-}
-
-function stack_swap(node: NodeStack, from: number, to: number) {
-    const tmp = node.entities[from];
-    node.entities[from] = node.entities[to];
-    node.entities[to] = tmp;
+    return stack.remove(entity);
 }
 
 export type NodeADT = NodeFork | NodeWindow | NodeStack;
@@ -157,10 +88,10 @@ export class Node {
         return new Node({ kind: NodeKind.WINDOW, entity });
     }
 
-    static stacked(window: Entity, idx: number): Node {
+    static stacked(stack: Stack, idx: number): Node {
         const node = new Node({
             kind: NodeKind.STACK,
-            entities: [window],
+            entities: stack.entities,
             idx,
             rect: null,
         });

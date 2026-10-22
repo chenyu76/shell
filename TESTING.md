@@ -24,6 +24,7 @@ node scripts/reset-windows-check.mjs
 ```
 
 These cover pile geometry, focus and grab ordering, title lifecycle, workspace-isolated reset,
+shared pile/tree membership through add/remove/swap operations, directional detachment,
 and animation timing, constraints and cleanup. They do not validate actual rendering.
 
 The full-extension close/focus regression can also run in an isolated headless GNOME session
@@ -38,6 +39,7 @@ python3 scripts/pile-grab-runtime-check.py
 This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
 It supplies the queued focus change explicitly because the headless session has no interactive seat,
 and checks that closing the front of a pile leaves each survivor's frame origin fixed during one resize.
+It rotates the pile before each close to check that the remaining order stays stable.
 The constrained-window check verifies that a Wayland window already at its minimum size still moves
 when the requested tile is smaller, with animations enabled and disabled.
 The grab check delivers focus/grab callbacks explicitly in the headless session and verifies real
@@ -106,6 +108,7 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 
 - [ ] Windows can be moved into a stack.
 - [ ] Windows can be moved out of a stack.
+- [ ] Directional move shortcuts take the front window out of the pile in all four directions; the remaining windows keep their order.
 - [ ] Windows inside and outside of a stack can be swapped multiple times and in both directions.
 - [ ] Moving the last window out of a stack works as expected.
 - [ ] Stacks can be resized with the keyboard.

@@ -323,7 +323,6 @@ export class Tiler {
         [fork, branch, is_left]: [Fork, Node.Node, boolean],
         focused: window.ShellWindow,
         direction: Direction,
-        force_detach: boolean = false,
     ) {
         if (!ext.auto_tiler) return;
 
@@ -383,25 +382,13 @@ export class Tiler {
 
         switch (direction) {
             case Direction.Left:
-                if (force_detach) {
-                    Node.stack_remove(forest, inner, fentity);
-                    detach(Lib.Orientation.HORIZONTAL, false);
-                } else if (!Node.stack_move_left(ext, forest, inner, fentity)) {
-                    detach(Lib.Orientation.HORIZONTAL, false);
-                }
-
-                ext.auto_tiler.update_stack(ext, inner);
+                Node.stack_remove(forest, inner, fentity);
+                detach(Lib.Orientation.HORIZONTAL, false);
                 break;
 
             case Direction.Right:
-                if (force_detach) {
-                    Node.stack_remove(forest, inner, fentity);
-                    detach(Lib.Orientation.HORIZONTAL, true);
-                } else if (!Node.stack_move_right(ext, forest, inner, fentity)) {
-                    detach(Lib.Orientation.HORIZONTAL, true);
-                }
-
-                ext.auto_tiler.update_stack(ext, inner);
+                Node.stack_remove(forest, inner, fentity);
+                detach(Lib.Orientation.HORIZONTAL, true);
                 break;
 
             case Direction.Up:

@@ -16,7 +16,7 @@ const MIN_WINDOW_SIZE = 64;
 /** The smallest height which the exposed part of a title bar may have to hold a title. */
 const MIN_TITLE_BAND = 20;
 
-function contains(entities: Array<Entity>, entity: Entity): boolean {
+function contains(entities: ReadonlyArray<Entity>, entity: Entity): boolean {
     return entities.some((compare) => Ecs.entity_eq(compare, entity));
 }
 
@@ -63,17 +63,14 @@ interface DrawnTitle {
 export class Stack {
     ext: Ext;
 
-    /** The window which is displayed in front of the others */
-    active: Entity;
+    /** The only window order, from the back to the front. */
+    private readonly order: Array<Entity>;
 
-    /** The position of the active window in `entities` */
-    active_id: number = 0;
+    /** The tree reads the same array; all membership changes go through this stack. */
+    get entities(): ReadonlyArray<Entity> { return this.order; }
 
-    /** The windows of this stack, in the order which they are navigated in */
-    entities: Array<Entity> = new Array();
-
-    /** The windows of this stack in the order which they are displayed in, from the back to the front */
-    display: Array<Entity> = new Array();
+    /** The front is always the last member of the pile. */
+    get active(): Entity { return this.order[this.order.length - 1]; }
 
     monitor: number;
 
@@ -98,7 +95,7 @@ export class Stack {
     /** The offsets which the current arrangement was computed with */
     private offsets_used: [number, number] = [0, 0];
 
-    private active_signals: [SignalID, SignalID] | null = null;
+    private active_signals: { window: Meta.Window; signals: [SignalID, SignalID] } | null = null;
 
     private restacker: SignalID = global.display.connect('restacked', () => this.restack());
 
@@ -108,9 +105,10 @@ export class Stack {
     /** Holds the titles, so that they can be stacked above the windows of this stack at once */
     private titles_actor: St.Widget = new St.Widget();
 
-    constructor(ext: Ext, active: Entity, workspace: number, monitor: number) {
+    constructor(ext: Ext, active: Entity, workspace: number, monitor: number, entities: ReadonlyArray<Entity> = [active]) {
         this.ext = ext;
-        this.active = active;
+        this.order = entities.slice();
+        this.promote(active);
         this.monitor = monitor;
         this.workspace = workspace;
 
@@ -118,23 +116,20 @@ export class Stack {
         this.titles_actor.hide();
     }
 
-    /** Updates membership, area and active order in one arrangement. */
-    update_layout(entities: Array<Entity>, area: Rectangular) {
-        this.active_disconnect();
-
-        this.entities = entities.slice();
-
-        this.display = this.display.filter((entity) => contains(this.entities, entity));
-
-        for (const entity of this.entities) {
-            if (!contains(this.display, entity)) this.display.push(entity);
-        }
-
-        this.keep_titles(this.entities);
-
+    /** Arranges the current order within the area assigned by the tree. */
+    update_layout(area: Rectangular) {
         this.reorder = true;
         this.rect = { x: area.x, y: area.y, width: area.width, height: area.height };
         this.auto_activate();
+    }
+
+    /** Adds a member behind the front, or at the back when entering from the right. */
+    add(entity: Entity, at_back: boolean = false) {
+        if (contains(this.order, entity)) return;
+        const index = at_back ? 0 : Math.max(0, this.order.length - 1);
+        this.order.splice(index, 0, entity);
+        this.reset_cycle();
+        this.reorder = true;
     }
 
     /** Displays a window of the stack in front of the others
@@ -146,7 +141,7 @@ export class Stack {
         if (this.arranging) return;
 
         const window = this.ext.windows.get(entity);
-        if (!window) return;
+        if (!window || !contains(this.order, entity)) return;
 
         // Another window is displayed in front by other means than the direction
         // keys, so the whole stack may be cycled again.
@@ -154,31 +149,18 @@ export class Stack {
             this.reset_cycle();
         }
 
-        const id = this.entities.findIndex((compare) => Ecs.entity_eq(compare, entity));
-        if (id !== -1) this.active_id = id;
-
         const permitted = this.permitted_to_show();
 
-        this.active_connect(window.meta, entity);
         this.promote(entity);
+        this.active_connect(window.meta);
         this.reset_visibility(permitted);
         this.arrange();
     }
 
-    /** Displays the active window in front of the others
-     *
-     * This is called after the windows of the stack were set, and falls back to
-     * the last window when the active one left the stack.
-     */
+    /** Exposes the last member; removing the front already exposes its successor. */
     auto_activate(): null | Entity {
-        if (this.entities.length === 0) return null;
-
-        if (this.entities.length <= this.active_id) {
-            this.active_id = this.entities.length - 1;
-        }
-
-        const entity = this.entities[this.active_id];
-
+        if (this.order.length === 0) return null;
+        const entity = this.active;
         this.activate(entity);
         return entity;
     }
@@ -195,7 +177,7 @@ export class Stack {
      * no window to move focus to.
      */
     cycle(next: boolean): null | Entity {
-        const count = this.display.length;
+        const count = this.order.length;
 
         if (this.arranging || count < 2) return null;
 
@@ -212,16 +194,16 @@ export class Stack {
 
         if (next) {
             // The window at the back of the pile is displayed in front.
-            this.display.push(this.display.shift() as Entity);
+            this.order.push(this.order.shift() as Entity);
         } else {
             // The window behind the window in front is displayed in front, and the
             // window in front moves to the back of the pile.
-            this.display.unshift(this.display.pop() as Entity);
+            this.order.unshift(this.order.pop() as Entity);
         }
 
         this.reorder = true;
 
-        const entity = this.display[count - 1];
+        const entity = this.order[count - 1];
 
         this.activate(entity, true);
         return entity;
@@ -235,15 +217,16 @@ export class Stack {
 
     /** Removes a window from the stack, returning the position which it had */
     remove(entity: Entity): null | number {
-        const idx = this.entities.findIndex((compare) => Ecs.entity_eq(compare, entity));
+        const idx = this.order.findIndex((compare) => Ecs.entity_eq(compare, entity));
         if (idx === -1) return null;
 
-        this.entities.splice(idx, 1);
-        this.display = this.display.filter((compare) => !Ecs.entity_eq(compare, entity));
+        if (idx === this.order.length - 1) this.active_disconnect();
+        this.order.splice(idx, 1);
 
-        this.keep_titles(this.entities);
+        this.keep_titles(this.order);
 
-        if (this.active_id > idx) this.active_id -= 1;
+        this.reset_cycle();
+        this.reorder = true;
 
         // The window is no longer hidden behind the others.
         const window = this.ext.windows.get(entity);
@@ -257,13 +240,12 @@ export class Stack {
 
     /** Replaces the window which is displayed in front with another window */
     replace(window: ShellWindow) {
-        const previous = this.entities[this.active_id];
+        const previous = this.active;
         if (!previous || !window.meta.get_compositor_private()) return;
 
-        const replace = (entity: Entity) => (Ecs.entity_eq(entity, previous) ? window.entity : entity);
-
-        this.entities = this.entities.map(replace);
-        this.display = this.display.map(replace);
+        this.order[this.order.length - 1] = window.entity;
+        this.reset_cycle();
+        this.reorder = true;
 
         this.activate(window.entity);
     }
@@ -277,7 +259,7 @@ export class Stack {
 
         this.titles_actor.destroy();
 
-        for (const entity of this.entities.splice(0)) {
+        for (const entity of this.order.splice(0)) {
             const window = this.ext.windows.get(entity);
             if (!window) continue;
 
@@ -287,12 +269,11 @@ export class Stack {
             }
         }
 
-        this.display = new Array();
     }
 
     /** Disconnects the change handlers of a window which is leaving the stack */
     deactivate(w: ShellWindow) {
-        if (Ecs.entity_eq(this.active, w.entity)) this.active_disconnect();
+        if (this.order.length > 0 && Ecs.entity_eq(this.active, w.entity)) this.active_disconnect();
     }
 
     /** The area which this stack occupies, given the frame rect of the window in front
@@ -301,7 +282,7 @@ export class Stack {
      * with, which lets a stack be resized by the frame of its window in front.
      */
     area_from_window(rect: Rectangular): Rectangular {
-        const count = this.entities.length;
+        const count = this.order.length;
         if (count < 2) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 
         const [dx, dy] = this.offsets_used;
@@ -316,7 +297,7 @@ export class Stack {
 
     /** Displays every window of the stack, or hides it when it may not be shown */
     reset_visibility(permitted: boolean) {
-        for (const entity of this.entities) {
+        for (const entity of this.order) {
             const actor = this.ext.windows.get(entity)?.meta.get_compositor_private() ?? null;
             if (!actor) continue;
 
@@ -358,13 +339,13 @@ export class Stack {
 
     /** Displays a window in front of the others, swapping it with the window in front */
     private promote(entity: Entity) {
-        const front = this.display.length - 1;
-        const current = this.display.findIndex((compare) => Ecs.entity_eq(compare, entity));
+        const front = this.order.length - 1;
+        const current = this.order.findIndex((compare) => Ecs.entity_eq(compare, entity));
 
         if (current === -1 || current === front) return;
 
-        this.display[current] = this.display[front];
-        this.display[front] = entity;
+        this.order[current] = this.order[front];
+        this.order[front] = entity;
         this.reorder = true;
     }
 
@@ -384,7 +365,7 @@ export class Stack {
 
     /** Computes the geometry of every window of the pile */
     private window_rects(): Array<Rectangular> {
-        const count = this.display.length;
+        const count = this.order.length;
         const { x, y, width, height } = this.rect;
         const rects: Array<Rectangular> = new Array(count);
 
@@ -411,7 +392,7 @@ export class Stack {
 
     /** Moves the windows of the stack into their cascaded positions */
     private arrange() {
-        if (this.arranging || this.display.length === 0) return;
+        if (this.arranging || this.order.length === 0) return;
         // Keep the whole pile still while Mutter owns one member's geometry.
         // Focus can update the display order; grab cleanup arranges it on release.
         if (this.is_dragged()) return;
@@ -421,7 +402,7 @@ export class Stack {
 
         try {
             const rects = this.window_rects();
-            const windows = this.display.map((entity) => this.ext.windows.get(entity));
+            const windows = this.order.map((entity) => this.ext.windows.get(entity));
 
             for (const [idx, window] of windows.entries()) {
                 if (window && window.actor_exists()) this.move_window(window, rects[idx]);
@@ -482,7 +463,7 @@ export class Stack {
      * exposed part of their title bar instead.
      */
     private sync_titles(rects: Array<Rectangular>) {
-        const count = this.display.length;
+        const count = this.order.length;
         const band = this.offsets_used[1];
 
         // The window in front displays its own title bar, and a band which is too
@@ -495,12 +476,12 @@ export class Stack {
             !this.is_dragged();
 
         const drawn = showing
-            ? this.display.slice(0, count - 1).filter((entity) => this.shall_draw_title(entity))
+            ? this.order.slice(0, count - 1).filter((entity) => this.shall_draw_title(entity))
             : new Array<Entity>();
 
         this.keep_titles(drawn);
 
-        for (const [idx, entity] of this.display.entries()) {
+        for (const [idx, entity] of this.order.entries()) {
             if (!contains(drawn, entity)) continue;
 
             const window = this.ext.windows.get(entity);
@@ -551,11 +532,11 @@ export class Stack {
     private is_dragged(): boolean {
         const grab = this.ext.grab_op;
 
-        return grab !== null && contains(this.entities, grab.entity);
+        return grab !== null && contains(this.order, grab.entity);
     }
 
     /** Removes the drawn titles of the windows which are not in this list */
-    private keep_titles(entities: Array<Entity>) {
+    private keep_titles(entities: ReadonlyArray<Entity>) {
         for (const title of this.titles.slice(0)) {
             if (!contains(entities, title.entity)) this.remove_title(title);
         }
@@ -595,6 +576,7 @@ export class Stack {
 
     /** Places the titles above the windows of this stack, and below the windows above them */
     private raise_titles() {
+        if (this.order.length === 0) return;
         const group = global.window_group;
         const front = this.ext.windows.get(this.active)?.meta.get_compositor_private() ?? null;
 
@@ -604,10 +586,8 @@ export class Stack {
     }
 
     /** Connects the change handlers to a window which is displayed in front */
-    private active_connect(window: Meta.Window, active: Entity) {
+    private active_connect(window: Meta.Window) {
         this.active_disconnect();
-
-        this.active = active;
 
         const update_border = () =>
             this.on_grab(() => {
@@ -618,18 +598,20 @@ export class Stack {
                 }
             });
 
-        this.active_signals = [
-            window.connect('size-changed', update_border),
-            window.connect('position-changed', update_border),
-        ];
+        this.active_signals = {
+            window,
+            signals: [
+                window.connect('size-changed', update_border),
+                window.connect('position-changed', update_border),
+            ],
+        };
     }
 
     /** Disconnects the change handlers of the active window */
     private active_disconnect() {
-        const window = this.ext.windows.get(this.active);
-
-        if (this.active_signals && window) {
-            for (const signal of this.active_signals) window.meta.disconnect(signal);
+        if (this.active_signals) {
+            const { window, signals } = this.active_signals;
+            for (const signal of signals) window.disconnect(signal);
         }
 
         this.active_signals = null;

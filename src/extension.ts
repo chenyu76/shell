@@ -1811,7 +1811,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                                     const node = stack_info[1].inner as node.NodeStack;
 
                                     win.stack = attachment;
-                                    node.entities.push(win.entity);
+                                    stack.add(win.entity);
                                     tiler.update_stack(this, node);
                                     tiler.forest.on_attach(fork.entity, win.entity);
                                     stack.activate(win.entity);

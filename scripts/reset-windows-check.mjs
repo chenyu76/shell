@@ -14,6 +14,7 @@ const { World } = await import('../target/ecs.js');
 const { Forest } = await import('../target/forest.js');
 const { AutoTiler } = await import('../target/auto_tiler.js');
 const { Rectangle } = await import('../target/rectangle.js');
+const { Tiler, Direction } = await import('../target/tiling.js');
 const Tags = await import('../target/tags.js');
 
 const ext = Object.assign(new World(), {
@@ -54,6 +55,7 @@ function makeWindow(monitor = 0, workspace = 0) {
         connect: () => 1, disconnect() {}, raise() {},
         get_compositor_private: () => actor,
         get_wm_class: () => 'Test',
+        has_focus: () => false,
         is_fullscreen: () => state.fullscreen,
         unminimize() { state.minimized = false; },
         unmaximize() { state.maximized = false; },
@@ -93,7 +95,10 @@ function checkPile(windows) {
     const root = forest.forks.get(attached.get(windows[0].entity));
     assert.equal(root.right, null);
     assert.equal(root.left.inner.kind, 3);
-    assert.deepEqual(root.left.inner.entities, windows.map(window => window.entity));
+    const pile = forest.stacks.get(windows[0].stack);
+    assert.equal(root.left.inner.entities, pile.entities, "The tree must read the pile's only array");
+    assert.deepEqual(new Set(pile.entities), new Set(windows.map(window => window.entity)));
+    assert.equal(pile.active, pile.entities.at(-1));
     assert.equal([...forest.forks.values()].filter(fork => fork.workspace === 0).length, 1);
     assert.equal(new Set(windows.map(window => window.stack)).size, 1);
     for (const window of windows) {
@@ -130,4 +135,53 @@ tiler.reset_to_pile(ext, [single], [2, 2]);
 assert.equal(forest.forks.get(attached.get(single.entity)).left.inner.kind, 3);
 assert.ok(single.rect().eq(new Rectangle([2008, 8, 984, 784])));
 console.log('ok  empty resets are harmless and a single window remains a valid pile');
+
+const root = forest.forks.get(attached.get(b.entity));
+const pile = forest.stacks.get(b.stack);
+const members = root.left.inner.entities;
+pile.activate(a.entity);
+pile.cycle(true);
+assert.equal(members, pile.entities);
+assert.equal(members.at(-1), pile.active);
+const removed = members[0];
+tiler.detach_window(ext, removed);
+assert.equal(members.length, 2, 'Removing through the tree must splice the shared list only once');
+assert.ok(!members.includes(removed));
+const joined = makeWindow();
+const front = pile.active;
+forest.attach_stack(ext, root.left.inner, root, joined.entity, true);
+assert.equal(members, pile.entities);
+assert.equal(pile.active, front, 'Joining without focus must keep the current front');
+assert.ok(root.left.is_in_stack(joined.entity));
+const plain = makeWindow(1);
+tiler.attach_to_monitor(ext, plain, [1, 0], false);
+tiler.attach_swap(ext, pile.active, plain.entity);
+assert.equal(members.at(-1), plain.entity);
+assert.equal(pile.active, plain.entity);
+assert.equal(new Set(members).size, members.length);
+tiler.attach_swap(ext, plain.entity, other.entity);
+assert.equal(members.at(-1), other.entity);
+assert.equal(forest.stacks.get(plain.stack).active, plain.entity);
+assert.equal(members, pile.entities);
+console.log('ok  the tree shares one pile order through rotation, detach, attach and cross-pile swaps');
+
+const keyboardTiler = new Tiler(ext);
+keyboardTiler.overlay_watch = () => {};
+for (const direction of [Direction.Left, Direction.Right, Direction.Up, Direction.Down]) {
+    const workspace = direction + 3;
+    const windows = [makeWindow(3, workspace), makeWindow(3, workspace), makeWindow(3, workspace)];
+    tiler.reset_to_pile(ext, windows, [3, workspace]);
+    const stack = forest.stacks.get(windows[0].stack);
+    const members = stack.entities;
+    const expected = members.slice(0, -1);
+    const selected = ext.windows.get(stack.active);
+    keyboardTiler.move_from_stack(ext, tiler.find_stack(selected.entity), selected, direction);
+    assert.equal(selected.stack, null);
+    assert.equal(stack.entities, members);
+    assert.deepEqual(members, expected);
+    assert.equal(stack.active, expected.at(-1));
+    const parent = forest.forks.get(attached.get(selected.entity));
+    assert.ok(parent.left.is_window(selected.entity) || parent.right?.is_window(selected.entity));
+}
+console.log('ok  directional movement detaches the front without changing the remaining pile order');
 console.log('ALL RESET WINDOWS CHECKS PASSED');

@@ -40,10 +40,9 @@ export class AutoTiler {
         const [entity, fork] = this.forest.create_toplevel(
             first.entity, ext.monitor_work_area(monitor).clone(), [monitor, workspace],
         );
-        const index = this.forest.stacks.insert(new Stack(ext, first.entity, workspace, monitor));
-        fork.left = new node.Node({
-            kind: NodeKind.STACK, idx: index, entities: windows.map(window => window.entity), rect: null,
-        });
+        const container = new Stack(ext, first.entity, workspace, monitor, windows.map(window => window.entity));
+        const index = this.forest.stacks.insert(container);
+        fork.left = node.Node.stacked(container, index);
         for (const window of windows) {
             window.stack = index;
             window.smart_gapped = smart_gaps;
@@ -484,7 +483,7 @@ export class AutoTiler {
 
             if (stack) {
                 if (matching_stack) {
-                    ext.tiler.move_from_stack(ext, stack, win, direction, true);
+                    ext.tiler.move_from_stack(ext, stack, win, direction);
                     return true;
                 } else if (attach_to.stack !== null) {
                     const onto_stack = ext.auto_tiler?.find_stack(attach_to.entity);
@@ -618,8 +617,9 @@ export class AutoTiler {
 
         if (toggled && fork.left.is_window(win.entity)) {
             // Assign left window as stack.
-            win.stack = this.forest.stacks.insert(new Stack(ext, win.entity, fork.workspace, fork.monitor));
-            fork.left = node.Node.stacked(win.entity, win.stack);
+            const container = new Stack(ext, win.entity, fork.workspace, fork.monitor);
+            win.stack = this.forest.stacks.insert(container);
+            fork.left = node.Node.stacked(container, win.stack);
             fork.measure(this.forest, ext, fork.area, this.forest.on_record());
         } else if (fork.left.is_in_stack(win.entity)) {
             const node = stack_toggle(fork, fork.left);
@@ -632,8 +632,9 @@ export class AutoTiler {
             }
         } else if (toggled && fork.right?.is_window(win.entity)) {
             // Assign right window as stack
-            win.stack = this.forest.stacks.insert(new Stack(ext, win.entity, fork.workspace, fork.monitor));
-            fork.right = node.Node.stacked(win.entity, win.stack);
+            const container = new Stack(ext, win.entity, fork.workspace, fork.monitor);
+            win.stack = this.forest.stacks.insert(container);
+            fork.right = node.Node.stacked(container, win.stack);
             fork.measure(this.forest, ext, fork.area, this.forest.on_record());
         } else if (fork.right?.is_in_stack(win.entity)) {
             const node = stack_toggle(fork, fork.right);
@@ -644,14 +645,16 @@ export class AutoTiler {
     }
 
     stack_left(ext: Ext, fork: Fork, window: ShellWindow) {
-        window.stack = this.forest.stacks.insert(new Stack(ext, window.entity, fork.workspace, fork.monitor));
-        fork.left = node.Node.stacked(window.entity, window.stack);
+        const container = new Stack(ext, window.entity, fork.workspace, fork.monitor);
+        window.stack = this.forest.stacks.insert(container);
+        fork.left = node.Node.stacked(container, window.stack);
         fork.measure(this.forest, ext, fork.area, this.forest.on_record());
     }
 
     stack_right(ext: Ext, fork: Fork, window: ShellWindow) {
-        window.stack = this.forest.stacks.insert(new Stack(ext, window.entity, fork.workspace, fork.monitor));
-        fork.right = node.Node.stacked(window.entity, window.stack);
+        const container = new Stack(ext, window.entity, fork.workspace, fork.monitor);
+        window.stack = this.forest.stacks.insert(container);
+        fork.right = node.Node.stacked(container, window.stack);
         fork.measure(this.forest, ext, fork.area, this.forest.on_record());
     }
 
@@ -685,7 +688,7 @@ export class AutoTiler {
             if (window) window.stack = stack.idx;
         }
 
-        container.update_layout(stack.entities, stack.rect);
+        container.update_layout(stack.rect);
     }
 
     windows_are_siblings(a: Entity, b: Entity): Entity | null {

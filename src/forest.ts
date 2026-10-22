@@ -179,11 +179,7 @@ export class Forest extends Ecs.World {
             if (window) {
                 window.stack = stack.idx;
 
-                if (stack_from_left) {
-                    stack.entities.push(new_entity);
-                } else {
-                    stack.entities.unshift(new_entity);
-                }
+                container.add(new_entity, !stack_from_left);
 
                 this.on_attach(fork.entity, new_entity);
 

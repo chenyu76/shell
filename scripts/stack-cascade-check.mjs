@@ -28,15 +28,22 @@ const stack_module = await import('../target/stack.js');
 const { Stack } = stack_module;
 
 let next_entity = 1;
+let next_signal = 1;
 function make_entity() {
     return [next_entity++, 1];
 }
 
 function make_window(entity, name, rect) {
-    const state = { rect: { ...rect }, moves: [], visible: true };
+    const state = { rect: { ...rect }, moves: [], visible: true, signals: new Set() };
     const meta = {
-        connect: () => 0,
-        disconnect: () => {},
+        connect() {
+            const id = next_signal++;
+            state.signals.add(id);
+            return id;
+        },
+        disconnect(id) {
+            assert.ok(state.signals.delete(id), 'Disconnect must use the window that owns the signal');
+        },
         get_wm_class: () => name,
         raise() {},
         get_compositor_private() {
@@ -113,22 +120,21 @@ function scenario(offsets, area, names, titled = new Array()) {
     const ext = make_ext(offsets, titled);
     const windows = names.map((name) => add_window(ext, name, area));
 
-    const stack = new Stack(ext, windows.at(-1).entity, 0, 0);
-    stack.active_id = windows.length - 1;
-    stack.update_layout(windows.map((window) => window.entity), area);
+    const stack = new Stack(ext, windows.at(-1).entity, 0, 0, windows.map(window => window.entity));
+    stack.update_layout(area);
 
     return { ext, stack, windows };
 }
 
-const order = ({ stack, windows }) => stack.display.map(entity => windows.find(w => w.entity === entity).name);
+const order = ({ stack, windows }) => stack.entities.map(entity => windows.find(w => w.entity === entity).name);
 const rectangles = windows => windows.map(window => window.rect());
 const labels = () => actors.drawn_actors().filter(actor => actor.style_class === 'pop-shell-pile-title');
 const titles = () => labels().map(label => label.text).sort();
 
 function assertLayout({ stack, ext }, area = AREA, dx = 32, dy = 32) {
-    const last = stack.display.length - 1;
-    assert.deepEqual(stack.display.map(entity => ext.windows.get(entity).rect()),
-        stack.display.map((_, index) => ({
+    const last = stack.entities.length - 1;
+    assert.deepEqual(stack.entities.map(entity => ext.windows.get(entity).rect()),
+        stack.entities.map((_, index) => ({
             x: Math.round(area.x + index * dx), y: Math.round(area.y + index * dy),
             width: area.width - last * dx, height: area.height - last * dy,
         })));
@@ -157,7 +163,7 @@ check('activation swaps the selected window with the front and survives a rebuil
     assertLayout(s);
     const before = rectangles(s.windows);
     s.stack.activate(s.windows[1].entity);
-    s.stack.update_layout(s.stack.entities, AREA);
+    s.stack.update_layout(AREA);
     assert.deepEqual(order(s), ['c', 'a', 'b']);
     assert.deepEqual(rectangles(s.windows), before);
 });
@@ -179,13 +185,13 @@ check('focus and layout changes wait for grab release, then restore the selected
     for (const window of s.windows) window.state.moves.length = 0;
     s.ext.grab_op = { entity: s.windows[0].entity };
     s.stack.activate(s.windows[0].entity);
-    s.stack.update_layout(s.stack.entities, AREA);
+    s.stack.update_layout(AREA);
     assert.equal(s.stack.active, s.windows[0].entity);
     assert.deepEqual(rectangles(s.windows), before);
     assert.ok(s.windows.every(window => window.state.moves.length === 0));
     s.ext.grab_op = null;
     s.stack.restack();
-    assert.equal(s.stack.display.at(-1), s.windows[0].entity);
+    assert.equal(s.stack.entities.at(-1), s.windows[0].entity);
     assertLayout(s);
 });
 
@@ -205,10 +211,32 @@ check('cycling visits each window once, supports reverse and restarts after acti
     s.stack.cycle(true);
     s.stack.cycle(false);
     assert.deepEqual(order(s), start);
-    s.stack.activate(s.stack.display[0]);
+    s.stack.activate(s.stack.entities[0]);
     for (let i = 0; i < 2; i++) assert.notEqual(s.stack.cycle(true), null);
     assert.equal(s.stack.cycle(true), null);
     assert.equal(scenario([32, 32], AREA, ['solo']).stack.cycle(true), null);
+});
+
+check('front signal handlers follow rotation, replacement and removal without stale bindings', () => {
+    const s = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    const members = s.stack.entities;
+    s.stack.cycle(true);
+    assert.equal(s.stack.entities, members);
+    assert.equal(s.stack.active, members.at(-1));
+    assert.ok(s.windows.every(window => window.state.signals.size === (window.entity === s.stack.active ? 2 : 0)));
+    const oldFront = s.stack.active;
+    const replacement = add_window(s.ext, 'replacement', AREA);
+    s.stack.replace(replacement);
+    assert.equal(s.stack.entities, members);
+    assert.equal(s.stack.active, replacement.entity);
+    assert.ok(!members.includes(oldFront));
+    assert.equal(s.ext.windows.get(oldFront).state.signals.size, 0);
+    s.stack.remove(replacement.entity);
+    assert.equal(replacement.state.signals.size, 0);
+    s.stack.update_layout(AREA);
+    s.stack.destroy();
+    assert.equal(members.length, 0);
+    assert.ok([...s.windows, replacement].every(window => window.state.signals.size === 0));
 });
 
 check('joining and closing windows submit only the final geometry, down to one survivor', () => {
@@ -216,32 +244,59 @@ check('joining and closing windows submit only the final geometry, down to one s
         for (const front of [false, true]) {
             const s = scenario([32, 32], AREA, ['a', 'b'].slice(0, count - 1));
             const extra = add_window(s.ext, 'new', AREA);
-            s.stack.update_layout([...s.windows, extra].map(window => window.entity), AREA);
+            s.stack.add(extra.entity);
+            s.stack.update_layout(AREA);
             s.stack.activate(extra.entity);
-            assert.equal(s.stack.display.at(-1), extra.entity);
+            assert.equal(s.stack.entities.at(-1), extra.entity);
             assertLayout(s);
-            const closing = front ? s.stack.display.at(-1) : s.stack.display[0];
+            const closing = front ? s.stack.entities.at(-1) : s.stack.entities[0];
             s.stack.remove(closing);
             s.ext.windows._map.delete(closing[0]);
             const survivors = [...s.windows, extra].filter(window => window.entity !== closing);
             for (const window of survivors) window.state.moves.length = 0;
-            s.stack.update_layout(s.stack.entities, AREA);
-            assert.ok(!s.stack.display.includes(closing));
+            s.stack.update_layout(AREA);
+            assert.ok(!s.stack.entities.includes(closing));
             assert.ok(survivors.every(window => window.state.moves.length === 1));
             assertLayout(s);
         }
     }
 });
 
-check('changing area and active window together skips intermediate arrangements', () => {
+check('changing area preserves the active window and skips intermediate arrangements', () => {
     const s = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    s.stack.activate(s.windows[0].entity);
     for (const window of s.windows) window.state.moves.length = 0;
-    s.stack.active_id = 0;
     const area = { ...AREA, x: AREA.x + 100, width: AREA.width + 120 };
-    s.stack.update_layout(s.stack.entities, area);
+    s.stack.update_layout(area);
     assert.ok(s.windows.every(window => window.state.moves.length === 1));
-    assert.equal(s.stack.display.at(-1), s.windows[0].entity);
+    assert.equal(s.stack.entities.at(-1), s.windows[0].entity);
     assertLayout(s, area);
+});
+
+check('closing a front selected by rotation or clicking preserves survivor order and origins', () => {
+    for (const rotated of [true, false]) {
+        const s = scenario([32, 32], AREA, rotated ? ['a', 'b', 'c'] : ['a', 'b', 'c', 'd']);
+        if (rotated) s.stack.cycle(true);
+        else s.stack.activate(s.windows[0].entity);
+        const expected = s.stack.entities.slice(0, -1);
+        const before = new Map(expected.map(entity => [entity, s.ext.windows.get(entity).rect()]));
+        const closing = s.stack.entities.at(-1);
+        s.stack.remove(closing);
+        s.ext.windows._map.delete(closing[0]);
+        for (const entity of expected) s.ext.windows.get(entity).state.moves.length = 0;
+        s.stack.update_layout(AREA);
+        assert.deepEqual(s.stack.entities, expected, 'Closing must not promote an arbitrary member');
+        assert.equal(s.stack.active, expected.at(-1));
+        // Deliver the subsequent focus notification for the newly exposed front.
+        s.stack.activate(expected.at(-1));
+        for (const entity of expected) {
+            const window = s.ext.windows.get(entity);
+            assert.equal(window.rect().x, before.get(entity).x);
+            assert.equal(window.rect().y, before.get(entity).y);
+            assert.equal(window.state.moves.length, 1, 'A survivor should resize once without a position swap');
+        }
+        assertLayout(s);
+    }
 });
 
 check('navigation bands distinguish horizontal and vertical neighbours from overlapping windows', () => {
@@ -262,7 +317,7 @@ check('titles label only eligible background windows and follow rotation', () =>
     const s = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
     s.stack.activate(s.windows[0].entity);
     assert.deepEqual(titles(), ['b', 'c']);
-    const behind = s.ext.windows.get(s.stack.display[0]);
+    const behind = s.ext.windows.get(s.stack.entities[0]);
     const label = labels().find(label => label.text === behind.name);
     assert.ok(Math.abs(label.position.x + label.size.width / 2 - behind.rect().x - behind.rect().width / 2) <= 0.5);
     assert.ok(Math.abs(label.position.y + label.size.height / 2 - behind.rect().y - 16) <= 0.5);
@@ -277,7 +332,7 @@ check('titles label only eligible background windows and follow rotation', () =>
 
 check('titles follow animated visual geometry without moving windows or reloading text', () => {
     const s = scenario([32, 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
-    const behind = s.ext.windows.get(s.stack.display[0]);
+    const behind = s.ext.windows.get(s.stack.entities[0]);
     const visual = { ...behind.rect(), x: behind.rect().x + 55, y: behind.rect().y + 33 };
     const before = rectangles(s.windows);
     s.ext.window_animations.visual_rect = (window, fallback) => window === behind ? visual : fallback ?? window.rect();
@@ -289,16 +344,15 @@ check('titles follow animated visual geometry without moving windows or reloadin
     assert.deepEqual(rectangles(s.windows), before);
 });
 
-check('titles disappear when hidden, removed, rebuilt, destroyed or too small', () => {
-    for (const action of ['hide', 'remove', 'rebuild', 'destroy', 'thin']) {
+check('titles disappear when hidden, removed, destroyed or too small', () => {
+    for (const action of ['hide', 'remove', 'destroy', 'thin']) {
         const s = scenario([32, action === 'thin' ? 8 : 32], AREA, ['a', 'b', 'c'], ['a', 'b', 'c']);
-        const dropped = s.stack.display[0];
+        const dropped = s.stack.entities[0];
         const name = s.ext.windows.get(dropped).name;
         if (action === 'hide') s.stack.set_visible(false);
         if (action === 'remove') s.stack.remove(dropped);
-        if (action === 'rebuild') s.stack.update_layout(s.stack.entities.filter(entity => entity !== dropped), AREA);
         if (action === 'destroy') s.stack.destroy();
-        assert.deepEqual(titles(), ['remove', 'rebuild'].includes(action)
+        assert.deepEqual(titles(), action === 'remove'
             ? order(s).slice(0, -1).filter(title => title !== name).sort() : []);
     }
 });

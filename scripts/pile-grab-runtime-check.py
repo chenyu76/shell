@@ -66,7 +66,7 @@ export default class PileGrabCheck extends Extension {
         if (!step) return;
         const ext = this.ext;
         const stack = ext.auto_tiler.forest.stacks.get(ext.get_window(this.windows[0]).stack);
-        const component = ext.windows.get(stack.display[step.index]);
+        const component = ext.windows.get(stack.entities[step.index]);
         const before = new Map(this.windows.map(meta => [meta, rect(meta)]));
         const slots = [...before.values()].sort((a, b) => a.x - b.x);
         const op = step.op ?? Meta.GrabOp.MOVING;
@@ -103,8 +103,8 @@ export default class PileGrabCheck extends Extension {
             check(ext.grab_op === null && !component.grab, 'Grab was not cleared');
             later(600, () => {
                 check(stack.active[0] === component.entity[0], 'Clicked window did not stay in front');
-                for (let i = 0; i < stack.display.length; i++) {
-                    const window = ext.windows.get(stack.display[i]);
+                for (let i = 0; i < stack.entities.length; i++) {
+                    const window = ext.windows.get(stack.entities[i]);
                     check(same(rect(window.meta), slots[i]), 'Release left a pile window in the wrong slot');
                     const actor = window.meta.get_compositor_private();
                     check(actor.opacity === 255 && actor.scale_x === 1 && actor.scale_y === 1,
