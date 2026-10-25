@@ -15,6 +15,8 @@ const { Forest } = await import('../target/forest.js');
 const { AutoTiler } = await import('../target/auto_tiler.js');
 const { Rectangle } = await import('../target/rectangle.js');
 const { Tiler, Direction } = await import('../target/tiling.js');
+const { Orientation } = await import('../target/lib.js');
+const { Keybindings } = await import('../target/keybindings.js');
 const Tags = await import('../target/tags.js');
 
 const ext = Object.assign(new World(), {
@@ -22,11 +24,13 @@ const ext = Object.assign(new World(), {
     tiler: { window: null, resizing_window: false },
     settings: {
         smart_gaps: () => false, stack_offset_x: () => 12, stack_offset_y: () => 40,
-        workspaces_only_on_primary: () => false,
+        workspaces_only_on_primary: () => false, stacking_with_mouse: () => true,
     },
-    conf: { window_has_pile_title: () => false },
+    conf: { window_has_pile_title: () => false, window_shall_float: () => false },
     monitor_work_area: monitor => new Rectangle([monitor * 1000, 0, 1000, 800]),
     active_workspace: () => 0,
+    previously_focused: () => null, should_ignore_workspace: () => false,
+    workspace_id(window) { return this.monitors.get(window.entity); },
     window_animations: { visual_rect: (window, fallback) => fallback ?? window.rect() },
     movements: { get: () => null },
     connect_window() {},
@@ -54,9 +58,10 @@ function makeWindow(monitor = 0, workspace = 0) {
     const meta = Object.assign(new Window(), {
         connect: () => 1, disconnect() {}, raise() {},
         get_compositor_private: () => actor,
-        get_wm_class: () => 'Test',
+        get_wm_class: () => 'Test', get_title: () => 'Test',
         has_focus: () => false,
         is_fullscreen: () => state.fullscreen,
+        change_workspace_by_index(index) { state.workspace = index; },
         unminimize() { state.minimized = false; },
         unmaximize() { state.maximized = false; },
         unmake_fullscreen() { state.fullscreen = false; },
@@ -66,7 +71,7 @@ function makeWindow(monitor = 0, workspace = 0) {
         entity, meta, state, stack: null, ignore_detach: false, prev_rect: rect.clone(),
         actor_exists: () => true, same_workspace: () => workspace === 0,
         is_maximized: () => state.maximized, rect: () => rect.clone(),
-        title: () => 'Test',
+        title: () => 'Test', is_tilable: () => true, activate() {},
         move(_ext, target, complete) { rect = Rectangle.from_meta(target); complete?.(); },
     };
     ext.windows.insert(entity, window);
@@ -77,10 +82,8 @@ function makeWindow(monitor = 0, workspace = 0) {
 const a = makeWindow(), b = makeWindow(), c = makeWindow(1);
 const other = makeWindow(1, 1);
 tiler.attach_to_monitor(ext, a, [0, 0], false);
-tiler.attach_to_window(ext, a, b, { auto: 0 });
-tiler.create_stack(ext, a);
+tiler.attach_to_window(ext, a, b, { orientation: Orientation.HORIZONTAL, swap: false });
 tiler.attach_to_monitor(ext, other, [1, 1], false);
-tiler.create_stack(ext, other);
 const otherParent = attached.get(other.entity);
 const otherStack = other.stack;
 const otherRect = other.rect();
@@ -89,7 +92,7 @@ ext.add_tag(c.entity, Tags.Floating);
 a.state.maximized = true;
 b.state.minimized = true;
 c.state.fullscreen = true;
-b.was_attached_to = [attached.get(b.entity), false];
+b.was_attached_to = forest.stacks.get(b.stack);
 
 function checkPile(windows) {
     const root = forest.forks.get(attached.get(windows[0].entity));
@@ -176,12 +179,216 @@ for (const direction of [Direction.Left, Direction.Right, Direction.Up, Directio
     const expected = members.slice(0, -1);
     const selected = ext.windows.get(stack.active);
     keyboardTiler.move_from_stack(ext, tiler.find_stack(selected.entity), selected, direction);
-    assert.equal(selected.stack, null);
+    assert.notEqual(selected.stack, null);
+    assert.notEqual(selected.stack, windows.find(window => window !== selected).stack);
     assert.equal(stack.entities, members);
     assert.deepEqual(members, expected);
     assert.equal(stack.active, expected.at(-1));
     const parent = forest.forks.get(attached.get(selected.entity));
-    assert.ok(parent.left.is_window(selected.entity) || parent.right?.is_window(selected.entity));
+    const leaf = parent.find_branch(selected.entity);
+    assert.equal(leaf.inner.kind, 3);
+    assert.deepEqual(leaf.inner.entities, [selected.entity]);
+    const expectedArea = direction === Direction.Left || direction === Direction.Up
+        ? parent.area_of_left(ext) : parent.area_of_right(ext);
+    assert.ok(selected.rect().eq(expectedArea));
+    const horizontal = direction === Direction.Left || direction === Direction.Right;
+    assert.equal(parent.is_horizontal(), horizontal);
+    const length = horizontal ? parent.area.width : parent.area.height;
+    assert.ok(Math.abs(parent.length_left - length / 2) < 1, 'A split must divide either axis evenly');
 }
 console.log('ok  directional movement detaches the front without changing the remaining pile order');
+
+
+// Check ownership through the real tree rather than just the changed branch.
+function checkForest() {
+    const piles = new Set(), entities = new Set();
+    for (const [root] of forest.toplevel.values()) {
+        assert.equal(forest.parents.get(root), null);
+        for (const branch of forest.iter(root)) {
+            const inner = branch.inner;
+            if (inner.kind === 1) {
+                assert.ok(forest.forks.get(inner.entity));
+                continue;
+            }
+            assert.equal(inner.kind, 3);
+            const pile = forest.stacks.get(inner.idx);
+            assert.equal(pile.entities, inner.entities);
+            assert.ok(inner.entities.length > 0);
+            assert.ok(!piles.has(pile));
+            piles.add(pile);
+            for (const entity of inner.entities) {
+                assert.ok(!entities.has(String(entity)), 'A window must have exactly one pile');
+                entities.add(String(entity));
+                const window = ext.windows.get(entity);
+                assert.equal(window.stack, inner.idx);
+                assert.equal(forest.forks.get(attached.get(entity)).find_branch(entity), branch);
+            }
+        }
+    }
+    assert.deepEqual(new Set(forest.stacks.values()), piles, 'No orphan containers');
+    for (const [entity, window] of ext.windows.iter()) {
+        assert.equal(attached.get(entity) !== null, entities.has(String(entity)));
+        assert.equal(window.stack !== null, entities.has(String(entity)));
+    }
+    for (const [entity, fork] of forest.forks.iter()) {
+        for (const child of [fork.left, fork.right]) {
+            if (child?.inner.kind === 1) assert.deepEqual(forest.parents.get(child.inner.entity), entity);
+        }
+    }
+}
+checkForest();
+
+const fresh = [makeWindow(4), makeWindow(4), makeWindow(4)];
+tiler.auto_tile(ext, fresh[0], true);
+const singleton = tiler.find_stack(fresh[0].entity)[1];
+const container = forest.stacks.get(fresh[0].stack);
+assert.deepEqual(container.entities, [fresh[0].entity]);
+assert.ok(fresh[0].rect().eq(new Rectangle([4008, 8, 984, 784])));
+for (const window of fresh.slice(1)) tiler.auto_tile(ext, window, true);
+assert.equal(tiler.find_stack(fresh[0].entity)[1], singleton);
+assert.equal(new Set(fresh.map(window => window.stack)).size, 1);
+for (const window of fresh.slice(1)) tiler.detach_window(ext, window.entity);
+assert.equal(forest.stacks.get(fresh[0].stack), container);
+assert.deepEqual(singleton.inner.entities, [fresh[0].entity]);
+const oldIndex = fresh[0].stack;
+const oldRoot = attached.get(fresh[0].entity);
+fresh[0].was_attached_to = container;
+tiler.detach_window(ext, fresh[0].entity);
+assert.equal(forest.stacks.get(oldIndex), null);
+assert.equal(forest.forks.get(oldRoot), null);
+assert.equal(container.entities.length, 0);
+checkForest();
+console.log('ok  default placement grows one pile and closing 3→2→1→0 keeps or releases its container');
+
+// A recycled arena slot must not become the original minimized pile.
+const recycled = makeWindow(5);
+tiler.auto_tile(ext, recycled, true);
+assert.equal(recycled.stack, oldIndex);
+tiler.restore_window(ext, fresh[0]);
+assert.notEqual(fresh[0].stack, recycled.stack);
+assert.equal(fresh[0].was_attached_to, undefined);
+tiler.attach_to_window(ext, fresh[0], fresh[1], { auto: 0 });
+const original = forest.stacks.get(fresh[0].stack);
+fresh[1].was_attached_to = original;
+tiler.detach_window(ext, fresh[1].entity);
+tiler.restore_window(ext, fresh[1]);
+assert.equal(forest.stacks.get(fresh[1].stack), original);
+assert.equal(original.active, fresh[1].entity);
+checkForest();
+console.log('ok  restore rejoins the original live pile and ignores a recycled container number');
+
+ext.tiler = keyboardTiler;
+const pair = [makeWindow(6), makeWindow(6)];
+tiler.reset_to_pile(ext, pair, [6, 0]);
+const point = (area, side = 'center') => new Rectangle([
+    side === 'left' ? area.x : side === 'right' ? area.x + area.width : area.x + area.width / 2,
+    area.y + area.height / 2, 1, 1,
+]);
+tiler.place_or_stack(ext, pair[0], pair[1], point(tiler.drop_area(...pair), 'left'));
+assert.notEqual(pair[0].stack, pair[1].stack);
+const rootPair = forest.forks.get(attached.get(pair[0].entity));
+assert.ok(pair[0].rect().x < pair[1].rect().x);
+const nodes = [rootPair.left, rootPair.right];
+tiler.place_or_stack(ext, pair[0], pair[1], point(tiler.drop_area(...pair), 'right'));
+assert.equal(rootPair.left, nodes[1]);
+assert.equal(rootPair.right, nodes[0]);
+tiler.place_or_stack(ext, pair[0], pair[1], point(tiler.drop_area(...pair)));
+assert.equal(pair[0].stack, pair[1].stack);
+keyboardTiler.move_from_stack(ext, tiler.find_stack(pair[0].entity), pair[0], Direction.Left);
+keyboardTiler.move_auto(ext, pair[0], pair[1]);
+assert.equal(pair[0].stack, pair[1].stack);
+keyboardTiler.move_from_stack(ext, tiler.find_stack(pair[0].entity), pair[0], Direction.Up);
+keyboardTiler.move_auto(ext, pair[0], 7);
+assert.equal(tiler.get_parent_fork(pair[0].entity).monitor, 7);
+const leaf = tiler.find_stack(pair[1].entity)[1];
+tiler.place_or_stack(ext, pair[1], pair[1], point(leaf.inner.rect, 'left'));
+assert.equal(tiler.find_stack(pair[1].entity)[1], leaf);
+assert.deepEqual(leaf.inner.entities, [pair[1].entity]);
+checkForest();
+console.log('ok  drag edges split or swap piles, centers join, and singleton keyboard moves join or cross monitors');
+
+// Destroy a leaf beside a fork, then remove a nested leaf and check all associations.
+const nested = [makeWindow(8), makeWindow(8), makeWindow(8), makeWindow(8)];
+tiler.attach_to_monitor(ext, nested[0], [8, 0], false);
+for (let i = 1; i < nested.length; i++) {
+    tiler.attach_to_window(ext, nested[i - 1], nested[i], { orientation: Orientation.HORIZONTAL, swap: false });
+}
+const nestedRoot = forest.find_toplevel([8, 0]);
+tiler.detach_window(ext, nested[0].entity);
+assert.deepEqual(forest.find_toplevel([8, 0]), nestedRoot);
+checkForest();
+tiler.detach_window(ext, nested[2].entity);
+checkForest();
+const remainingRoot = forest.forks.get(nestedRoot);
+remainingRoot.migrate(ext, forest, new Rectangle([9000, 0, 1000, 800]), 9, 2);
+for (const window of [nested[1], nested[3]]) {
+    const pile = forest.stacks.get(window.stack);
+    assert.equal(pile.monitor, 9);
+    assert.equal(pile.workspace, 2);
+    assert.equal(window.known_workspace, 2);
+    assert.equal(window.state.workspace, 2);
+    assert.deepEqual(ext.monitors.get(window.entity), [9, 2]);
+}
+checkForest();
+console.log('ok  empty leaf collapse and monitor/workspace migration preserve all pile and parent associations');
+const floating = makeWindow(10);
+tiler.auto_tile(ext, floating, true);
+ext.focus_window = () => floating;
+ext.register_fn = callback => callback();
+tiler.toggle_floating(ext);
+assert.equal(floating.stack, null);
+assert.equal(attached.get(floating.entity), null);
+assert.ok(ext.contains_tag(floating.entity, Tags.Floating));
+tiler.toggle_floating(ext);
+assert.ok(!ext.contains_tag(floating.entity, Tags.Floating));
+assert.deepEqual(tiler.find_stack(floating.entity)[1].inner.entities, [floating.entity]);
+checkForest();
+console.log('ok  floating leaves the tree and tiling again creates a singleton pile');
+ext.settings.smart_gaps = () => true;
+const smart = [makeWindow(11), makeWindow(11)];
+tiler.attach_to_monitor(ext, smart[0], [11, 0], true);
+tiler.attach_to_window(ext, smart[0], smart[1], { auto: 0 });
+assert.ok(smart.every(window => window.smart_gapped));
+keyboardTiler.move_from_stack(ext, tiler.find_stack(smart[0].entity), smart[0], Direction.Up);
+const splitRoot = tiler.get_parent_fork(smart[0].entity);
+assert.equal(splitRoot.smart_gapped, false);
+assert.equal(splitRoot.area.height, 784);
+assert.equal(splitRoot.length_left, 392);
+assert.ok(smart.every(window => !window.smart_gapped));
+tiler.place_or_stack(ext, smart[0], smart[1], point(tiler.drop_area(...smart)));
+const mergedRoot = tiler.get_parent_fork(smart[0].entity);
+assert.equal(mergedRoot.smart_gapped, true);
+assert.equal(mergedRoot.area.height, 800);
+assert.ok(smart.every(window => window.smart_gapped));
+checkForest();
+console.log('ok  smart gaps follow pile splits and merges while preserving an even split');
+
+const cycling = [makeWindow(12), makeWindow(12), makeWindow(12), makeWindow(12)];
+tiler.reset_to_pile(ext, cycling, [12, 0]);
+keyboardTiler.move_from_stack(ext, tiler.find_stack(cycling[3].entity), cycling[3], Direction.Right);
+const cyclingPile = forest.stacks.get(cycling[0].stack);
+const sequence = cyclingPile.entities.slice();
+let focused = ext.windows.get(cyclingPile.active);
+ext.focus_window = () => focused;
+for (const window of cycling) window.activate = () => focused = window;
+const bindings = new Keybindings(ext).global;
+let index = sequence.length - 1;
+for (const [name, step] of [['pile-next', 1], ['pile-previous', -1]]) {
+    for (let i = 0; i < sequence.length * 2 + 1; i++) {
+        bindings[name]();
+        index = (index + step + sequence.length) % sequence.length;
+        assert.equal(focused.entity, sequence[index]);
+        assert.equal(cyclingPile.active, focused.entity);
+    }
+}
+focused = cycling[3];
+bindings['pile-next']();
+assert.equal(focused, cycling[3], 'A singleton must not navigate into its neighbour');
+focused = makeWindow(12);
+bindings['pile-previous']();
+assert.equal(focused.stack, null, 'A floating window must stay outside the pile');
+focused = null;
+bindings['pile-next']();
+checkForest();
+console.log('ok  dedicated pile shortcuts wrap in both directions beside another tile and ignore singleton or untiled windows');
 console.log('ALL RESET WINDOWS CHECKS PASSED');

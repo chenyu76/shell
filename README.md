@@ -42,6 +42,7 @@ In contrast, the original Pop Shell looks like this:
 
 Focusing a window of a stack swaps its place with the window which is displayed in front, so the window which was selected is always completely visible and all windows in the stack are always clickable.
 
+
 ```text
 ┌───────────────────┐                     ┌───────────────────┐
 │ App 1       - O X │                     │ App 1       - O X │
@@ -59,6 +60,7 @@ Focusing a window of a stack swaps its place with the window which is displayed 
 
 - The horizontal and vertical offsets of the cascade can be configure in the preferences of the extension.
 - Navigating windows by shortcuts are now more intuitive.
+- `Super` + `[` / `]` cycles to the previous / next window in the current pile.
 
 ## Animation
 

@@ -265,10 +265,9 @@ export class Stack {
 
             if (this.workspace === this.ext.active_workspace()) {
                 window.meta.get_compositor_private()?.show();
-                window.stack = null;
             }
+            window.stack = null;
         }
-
     }
 
     /** Disconnects the change handlers of a window which is leaving the stack */

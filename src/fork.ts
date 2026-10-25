@@ -17,7 +17,7 @@ const HEIGHT = 3;
 
 /** A tiling fork contains two children nodes.
  *
- * These nodes may either be windows, or sub-forks.
+ * These nodes are piles or sub-forks.
  */
 export class Fork {
     left: Node;
@@ -73,17 +73,12 @@ export class Fork {
 
     /** The calculated right area of this fork */
     area_of_right(ext: Ext): Rect.Rectangle {
-        let area: [number, number, number, number];
-
-        if (this.is_horizontal()) {
-            const width = this.area.width - this.length_left + ext.gap_inner;
-            area = [width, this.area.y, this.area.width - width, this.area.height];
-        } else {
-            const height = this.area.height - this.length_left + ext.gap_inner;
-            area = [this.area.x, height, this.area.width, this.area.height - height];
-        }
-
-        return new Rect.Rectangle(area);
+        const offset = this.length_left + ext.gap_inner_half;
+        return new Rect.Rectangle(
+            this.is_horizontal()
+                ? [this.area.x + offset, this.area.y, this.area.width - offset, this.area.height]
+                : [this.area.x, this.area.y + offset, this.area.width, this.area.height - offset],
+        );
     }
 
     depth(): number {
@@ -93,12 +88,6 @@ export class Fork {
     find_branch(entity: Entity): Node | null {
         const locate = (branch: Node): Node | null => {
             switch (branch.inner.kind) {
-                case 2:
-                    if (Ecs.entity_eq(branch.inner.entity, entity)) {
-                        return branch;
-                    }
-
-                    break;
                 case 3:
                     for (const e of branch.inner.entities) {
                         if (Ecs.entity_eq(e, entity)) {
@@ -127,57 +116,10 @@ export class Fork {
 
     /** Replaces the association of a window in a fork with another */
     replace_window(ext: Ext, a: ShellWindow, b: ShellWindow): null | (() => void) {
-        let closure = null;
-
-        let check_right = () => {
-            if (this.right) {
-                const inner = this.right.inner;
-                if (inner.kind === 2) {
-                    closure = () => {
-                        inner.entity = b.entity;
-                    };
-                } else if (inner.kind === 3) {
-                    const idx = node.stack_find(inner, a.entity);
-                    if (idx === null) {
-                        closure = null;
-                        return;
-                    }
-
-                    closure = () => {
-                        node.stack_replace(ext, inner, b);
-                    };
-                }
-            }
-        };
-
-        switch (this.left.inner.kind) {
-            case 1:
-                check_right();
-                break;
-            case 2:
-                const inner = this.left.inner;
-                if (Ecs.entity_eq(inner.entity, a.entity)) {
-                    closure = () => {
-                        inner.entity = b.entity;
-                    };
-                } else {
-                    check_right();
-                }
-
-                break;
-            case 3:
-                const inner_s = this.left.inner as node.NodeStack;
-                let idx = node.stack_find(inner_s, a.entity);
-                if (idx !== null) {
-                    closure = () => {
-                        node.stack_replace(ext, inner_s, b);
-                    };
-                } else {
-                    check_right();
-                }
-        }
-
-        return closure;
+        const branch = this.find_branch(a.entity);
+        if (!branch || branch.inner.kind !== node.NodeKind.STACK) return null;
+        const pile = branch.inner;
+        return () => node.stack_replace(ext, pile, b);
     }
 
     /** Sets a new area for this fork */
@@ -206,7 +148,7 @@ export class Fork {
     }
 
     /** Calculates the future arrangement of windows in this fork */
-    measure(tiler: Forest, ext: Ext, area: Rectangle, record: (win: Entity, parent: Entity, area: Rectangle) => void) {
+    measure(tiler: Forest, ext: Ext, area: Rectangle) {
         let ratio = null;
 
         let manually_moved = ext.grab_op !== null || ext.tiler.resizing_window;
@@ -250,14 +192,14 @@ export class Fork {
 
             region.array[l] = length - ext.gap_inner_half;
 
-            this.left.measure(tiler, ext, this.entity, region, record);
+            this.left.measure(tiler, ext, region);
 
             region.array[p] = region.array[p] + length + ext.gap_inner_half;
             region.array[l] = this.area.array[l] - length - ext.gap_inner_half;
 
-            this.right.measure(tiler, ext, this.entity, region, record);
+            this.right.measure(tiler, ext, region);
         } else {
-            this.left.measure(tiler, ext, this.entity, this.area, record);
+            this.left.measure(tiler, ext, this.area);
         }
     }
 
@@ -282,28 +224,19 @@ export class Fork {
                         cfork.monitor = monitor;
                         cfork.on_primary_display = primary;
                         break;
-                    case 2:
-                        let window = ext.windows.get(child.inner.entity);
-                        if (window) {
-                            ext.size_signals_block(window);
-                            window.reassignment = false;
-                            window.known_workspace = workspace;
-                            window.meta.change_workspace_by_index(workspace, true);
-                            ext.monitors.insert(window.entity, [monitor, workspace]);
-                            blocked.push(window);
-                        }
-                        break;
                     case 3:
                         for (const entity of child.inner.entities) {
                             let stack = ext.auto_tiler.forest.stacks.get(child.inner.idx);
                             if (stack) {
                                 stack.workspace = workspace;
+                                stack.monitor = monitor;
                             }
 
                             let window = ext.windows.get(entity);
 
                             if (window) {
                                 ext.size_signals_block(window);
+                                window.reassignment = false;
                                 window.known_workspace = workspace;
                                 window.meta.change_workspace_by_index(workspace, true);
                                 ext.monitors.insert(window.entity, [monitor, workspace]);
@@ -319,8 +252,8 @@ export class Fork {
             area.height -= ext.gap_outer * 2;
 
             this.set_area(area.clone());
-            this.measure(forest, ext, area, forest.on_record());
-            forest.arrange(ext, workspace, true);
+            this.measure(forest, ext, area);
+            forest.arrange(ext);
 
             for (const window of blocked) {
                 ext.size_signals_unblock(window);

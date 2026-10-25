@@ -123,6 +123,16 @@
             <summary>Focus right window</summary>
         </key>
 
+        <key type="as" name="pile-previous">
+            <default><![CDATA[['<Super>bracketleft']]]></default>
+            <summary>Focus the previous window in the current pile</summary>
+        </key>
+
+        <key type="as" name="pile-next">
+            <default><![CDATA[['<Super>bracketright']]]></default>
+            <summary>Focus the next window in the current pile</summary>
+        </key>
+
         <!-- Launcher -->
         <key type="as" name="activate-launcher">
             <default><![CDATA[['<Super>slash']]]></default>
@@ -130,16 +140,6 @@
         </key>
 
         <!-- Window Management Keys -->
-        <key type="as" name="toggle-stacking">
-            <default><![CDATA[['s']]]></default>
-            <summary>Toggle stacking mode inside management mode</summary>
-        </key>
-
-        <key type="as" name="toggle-stacking-global">
-            <default><![CDATA[['<Super>s']]]></default>
-            <summary>Toggle stacking mode outside management mode</summary>
-        </key>
-
         <key type="as" name="management-orientation">
             <default><![CDATA[['o']]]></default>
             <summary>Toggle tiling orientation</summary>

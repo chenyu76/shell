@@ -15,6 +15,8 @@ export class Keybindings {
         this.global = {
             'activate-launcher': () => ext.window_search.open(ext),
             'tile-enter': () => ext.tiler.enter(ext),
+            'pile-previous': () => ext.auto_tiler?.cycle_pile(ext, false),
+            'pile-next': () => ext.auto_tiler?.cycle_pile(ext, true),
         };
 
         this.window_focus = {
@@ -37,8 +39,6 @@ export class Keybindings {
             'toggle-floating': () => ext.auto_tiler?.toggle_floating(ext),
 
             'toggle-tiling': () => ext.toggle_tiling(),
-
-            'toggle-stacking-global': () => ext.auto_tiler?.toggle_stacking(ext),
 
             'tile-move-left-global': () => ext.tiler.move_left(ext, ext.focus_window()?.entity),
 

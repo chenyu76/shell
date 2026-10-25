@@ -8,6 +8,7 @@ import * as xprop from './xprop.js';
 import type { Entity } from './ecs.js';
 import type { Ext } from './extension.js';
 import type { Rectangle } from './rectangle.js';
+import type { Stack } from './stack.js';
 import * as scheduler from './scheduler.js';
 import * as focus from './focus.js';
 
@@ -59,12 +60,14 @@ export class ShellWindow {
     entity: Entity;
     meta: Meta.Window;
     ext: Ext;
+    /** Null only while this window is outside the tiling tree. */
     stack: number | null = null;
     known_workspace: number;
     grab: boolean = false;
     activate_after_move: boolean = false;
     ignore_detach: boolean = false;
-    was_attached_to?: [Entity, boolean | number];
+    /** Container identity prevents restoring into a reused arena slot. */
+    was_attached_to?: Stack;
     destroying: boolean = false;
 
     // Awaiting reassignment after a display update

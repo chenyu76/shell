@@ -7,27 +7,20 @@ import type { Rectangle } from './rectangle.js';
 import type { Stack } from './stack.js';
 import { ShellWindow } from './window.js';
 
-/** A node is either a fork a window */
+/** A tiling node is either a fork or a pile, including singleton piles. */
 export enum NodeKind {
     FORK = 1,
-    WINDOW = 2,
     STACK = 3,
 }
 
 /** Fetch the string representation of this value */
 function node_variant_as_string(value: NodeKind): string {
-    return value == NodeKind.FORK ? 'NodeVariant::Fork' : 'NodeVariant::Window';
+    return value == NodeKind.FORK ? 'NodeVariant::Fork' : 'NodeVariant::Stack';
 }
 
 /** Identifies this node as a fork */
 export interface NodeFork {
     kind: 1;
-    entity: Entity;
-}
-
-/** Identifies this node as a window */
-export interface NodeWindow {
-    kind: 2;
     entity: Entity;
 }
 
@@ -39,18 +32,6 @@ export interface NodeStack {
     rect: Rectangle | null;
 }
 
-export function stack_find(node: NodeStack, entity: Entity): null | number {
-    let idx = 0;
-    while (idx < node.entities.length) {
-        if (Ecs.entity_eq(entity, node.entities[idx])) {
-            return idx;
-        }
-        idx += 1;
-    }
-
-    return null;
-}
-
 export function stack_replace(ext: Ext, node: NodeStack, window: ShellWindow) {
     if (!ext.auto_tiler) return;
 
@@ -60,16 +41,9 @@ export function stack_replace(ext: Ext, node: NodeStack, window: ShellWindow) {
     stack.replace(window);
 }
 
-/** Removes a window from a stack */
-export function stack_remove(forest: Forest, node: NodeStack, entity: Entity): null | number {
-    const stack = forest.stacks.get(node.idx);
-    if (!stack) return null;
-    return stack.remove(entity);
-}
+export type NodeADT = NodeFork | NodeStack;
 
-export type NodeADT = NodeFork | NodeWindow | NodeStack;
-
-/** A tiling node may either refer to a window entity, or another fork entity */
+/** A tiling node refers to a pile or another fork. */
 export class Node {
     /** The actual data for this node */
     inner: NodeADT;
@@ -81,11 +55,6 @@ export class Node {
     /** Create a fork variant of a `Node` */
     static fork(entity: Entity): Node {
         return new Node({ kind: NodeKind.FORK, entity });
-    }
-
-    /** Create the window variant of a `Node` */
-    static window(entity: Entity): Node {
-        return new Node({ kind: NodeKind.WINDOW, entity });
     }
 
     static stacked(stack: Stack, idx: number): Node {
@@ -104,9 +73,8 @@ export class Node {
         fmt += `{\n    kind: ${node_variant_as_string(this.inner.kind)},\n    `;
 
         switch (this.inner.kind) {
-            // Fork + Window
+            // Fork
             case 1:
-            case 2:
                 fmt += `entity: (${this.inner.entity})\n  }`;
                 return fmt;
             // Stack
@@ -132,32 +100,16 @@ export class Node {
         return this.inner.kind === 1 && Ecs.entity_eq(this.inner.entity, entity);
     }
 
-    /** Asks if this window is the window we are looking for */
-    is_window(entity: Entity): boolean {
-        return this.inner.kind === 2 && Ecs.entity_eq(this.inner.entity, entity);
-    }
-
     /** Calculates the future arrangement of windows in this node */
-    measure(
-        tiler: Forest,
-        ext: Ext,
-        parent: Entity,
-        area: Rectangle,
-        record: (win: Entity, parent: Entity, area: Rectangle) => void,
-    ) {
+    measure(tiler: Forest, ext: Ext, area: Rectangle) {
         switch (this.inner.kind) {
             // Fork
             case 1:
                 const fork = tiler.forks.get(this.inner.entity);
                 if (fork) {
-                    record;
-                    fork.measure(tiler, ext, area, record);
+                    fork.measure(tiler, ext, area);
                 }
 
-                break;
-            // Window
-            case 2:
-                record(this.inner.entity, parent, area.clone());
                 break;
             // Stack
             case 3:
@@ -166,7 +118,7 @@ export class Node {
                 this.inner.rect = area.clone();
 
                 if (ext.auto_tiler) {
-                    ext.auto_tiler.forest.stack_updates.push([this.inner, parent]);
+                    tiler.stack_updates.add(this.inner);
                 }
         }
     }
