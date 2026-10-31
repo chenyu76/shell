@@ -424,22 +424,27 @@ export class Stack {
     }
 
     private move_window(window: ShellWindow, rect: Rectangular) {
+        const maximized = window.is_maximized();
+        // Preserve established windows, but let new windows receive their first
+        // layout even when the application restores a maximized startup state.
+        // Check before blocking size signals: off-workspace maximized windows refuse moves.
+        if (maximized && (!window.same_workspace() ||
+            (window.initial_layout_complete && !this.ext.settings.unmaximize_on_focus()))) return;
+
         // Moves are queued. A matching frame may still have a pending move away
         // from this slot, which must be replaced when focus switches back.
         const current = this.ext.movements.get(window.entity) ?? window.rect();
 
         if (
+            !maximized &&
             current.x === rect.x &&
             current.y === rect.y &&
             current.width === rect.width &&
             current.height === rect.height
         ) {
+            window.initial_layout_complete = true;
             return;
         }
-
-        // A window which is maximized on another workspace refuses to move, which
-        // would otherwise leave its size signals blocked.
-        if (!window.same_workspace() && window.is_maximized()) return;
 
         const ext = this.ext;
 
@@ -452,6 +457,7 @@ export class Stack {
 
             ext.size_signals_unblock(window);
         });
+        window.initial_layout_complete = true;
     }
 
     /** Draws the titles of the windows which are not displayed in front

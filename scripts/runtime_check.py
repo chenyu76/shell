@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 
-def run_session(root, marker, passes, seconds, full_extension):
+def run_session(root, marker, passes, seconds, full_extension, monitors):
     enabled = ['pile-close-check@local']
     if full_extension:
         enabled.insert(0, 'pop-shell@system76.com')
@@ -22,22 +22,23 @@ def run_session(root, marker, passes, seconds, full_extension):
         subprocess.run(['gsettings', 'set', schema, key, value], check=True)
     result = subprocess.run(
         ['timeout', f'{seconds}s', 'gnome-shell', '--headless', '--wayland', '--no-x11',
-         '--wayland-display', 'pile-check', '--virtual-monitor', '1280x900'],
+         '--wayland-display', 'pile-check',
+         *[argument for size in monitors for argument in ('--virtual-monitor', size)]],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     log = root / 'shell.log'
     log.write_text(result.stdout)
     print(f'GNOME log: {log}')
     failures = [line for line in result.stdout.splitlines()
-                if 'JS ERROR' in line or 'Window animation unavailable' in line]
+                if 'JS ERROR' in line or 'Window animation unavailable' in line or f'[{marker}] FAIL' in line]
     for line in failures:
         print(line)
-    if failures or result.stdout.count(f'[{marker}] PASS') != passes:
+    if result.returncode not in (0, 124) or failures or result.stdout.count(f'[{marker}] PASS') != passes:
         raise SystemExit(f'FAIL: {marker}; inspect the GNOME log')
     print(f'PASS: {marker} ({passes} scenarios)')
 
 
-def run(client_source, check, marker, passes, seconds=14, full_extension=True):
+def run(client_source, check, marker, passes, seconds=14, full_extension=True, monitors=('1280x900',)):
     build = Path(__file__).resolve().parents[1] / '_build'
     root = Path(tempfile.mkdtemp(prefix='pop-shell-check-'))
     (root / 'runtime').mkdir(mode=0o700)
@@ -60,8 +61,9 @@ def run(client_source, check, marker, passes, seconds=14, full_extension=True):
                **{f'XDG_{name.upper()}_HOME': str(root / name) for name in ['config', 'data', 'cache', 'state']})
     env['XDG_RUNTIME_DIR'] = str(root / 'runtime')
     subprocess.run(['dbus-run-session', '--', sys.executable, __file__, str(root), marker,
-                    str(passes), str(seconds), str(int(full_extension))], env=env, check=True)
+                    str(passes), str(seconds), str(int(full_extension)), *monitors], env=env, check=True)
 
 
 if __name__ == '__main__':
-    run_session(Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), bool(int(sys.argv[5])))
+    run_session(Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), bool(int(sys.argv[5])),
+                sys.argv[6:])

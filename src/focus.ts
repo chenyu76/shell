@@ -12,11 +12,22 @@ export enum FocusPosition {
     Center = 'Center',
 }
 
+interface FocusCandidate {
+    window: ShellWindow;
+    area: Rectangular;
+}
+
+/** Tiled navigation follows the tree even while native geometry is still queued. */
+export function window_area(ext: Ext, window: ShellWindow): Rectangular {
+    const stack = window.stack === null ? null : ext.auto_tiler?.forest.stacks.get(window.stack);
+    return stack?.rect ?? window.rect();
+}
+
 export class FocusSelector {
     /** Selects the closest window in a direction, ignoring the windows which the filter rejects */
-    select(
+    private select(
         ext: Ext,
-        direction: (a: ShellWindow, b: Array<ShellWindow>) => Array<ShellWindow>,
+        direction: (area: Rectangular, candidates: Array<FocusCandidate>) => Array<FocusCandidate>,
         window: ShellWindow | null,
         filter?: (window: ShellWindow) => boolean,
     ): ShellWindow | null {
@@ -24,11 +35,12 @@ export class FocusSelector {
         if (window) {
             // A stack is represented by the window which it displays in front, as
             // the windows behind it are hidden by that window.
-            let window_list = ext.active_window_list().filter((window) => in_front(ext, window));
+            let window_list = ext.active_window_list().filter((window) => !window.meta.minimized && in_front(ext, window));
 
             if (filter) window_list = window_list.filter(filter);
 
-            return select(direction, window, window_list);
+            const candidates = window_list.map(window => ({ window, area: window_area(ext, window) }));
+            return direction(window_area(ext, window), candidates)[0]?.window ?? null;
         }
 
         return null;
@@ -61,35 +73,30 @@ function in_front(ext: Ext, window: ShellWindow): boolean {
     return Ecs.entity_eq(stack.active, window.entity);
 }
 
-function select(
-    windows: (a: ShellWindow, b: Array<ShellWindow>) => Array<ShellWindow>,
-    focused: ShellWindow,
-    window_list: Array<ShellWindow>,
-): ShellWindow | null {
-    const array = windows(focused, window_list);
-    return array.length > 0 ? array[0] : null;
+function window_down(focused: Rectangular, windows: Array<FocusCandidate>) {
+    return windows
+        .filter(({ area }) => area.y > focused.y)
+        .sort((a, b) => Geom.directional_distance(a.area, focused, Geom.north, Geom.south) -
+            Geom.directional_distance(b.area, focused, Geom.north, Geom.south));
 }
 
-function window_down(focused: ShellWindow, windows: Array<ShellWindow>) {
+function window_left(focused: Rectangular, windows: Array<FocusCandidate>) {
     return windows
-        .filter((win) => !win.meta.minimized && win.meta.get_frame_rect().y > focused.meta.get_frame_rect().y)
-        .sort((a, b) => Geom.downward_distance(a.meta, focused.meta) - Geom.downward_distance(b.meta, focused.meta));
+        .filter(({ area }) => area.x < focused.x)
+        .sort((a, b) => Geom.directional_distance(a.area, focused, Geom.east, Geom.west) -
+            Geom.directional_distance(b.area, focused, Geom.east, Geom.west));
 }
 
-function window_left(focused: ShellWindow, windows: Array<ShellWindow>) {
+function window_right(focused: Rectangular, windows: Array<FocusCandidate>) {
     return windows
-        .filter((win) => !win.meta.minimized && win.meta.get_frame_rect().x < focused.meta.get_frame_rect().x)
-        .sort((a, b) => Geom.leftward_distance(a.meta, focused.meta) - Geom.leftward_distance(b.meta, focused.meta));
+        .filter(({ area }) => area.x > focused.x)
+        .sort((a, b) => Geom.directional_distance(a.area, focused, Geom.west, Geom.east) -
+            Geom.directional_distance(b.area, focused, Geom.west, Geom.east));
 }
 
-function window_right(focused: ShellWindow, windows: Array<ShellWindow>) {
+function window_up(focused: Rectangular, windows: Array<FocusCandidate>) {
     return windows
-        .filter((win) => !win.meta.minimized && win.meta.get_frame_rect().x > focused.meta.get_frame_rect().x)
-        .sort((a, b) => Geom.rightward_distance(a.meta, focused.meta) - Geom.rightward_distance(b.meta, focused.meta));
-}
-
-function window_up(focused: ShellWindow, windows: Array<ShellWindow>) {
-    return windows
-        .filter((win) => !win.meta.minimized && win.meta.get_frame_rect().y < focused.meta.get_frame_rect().y)
-        .sort((a, b) => Geom.upward_distance(a.meta, focused.meta) - Geom.upward_distance(b.meta, focused.meta));
+        .filter(({ area }) => area.y < focused.y)
+        .sort((a, b) => Geom.directional_distance(a.area, focused, Geom.south, Geom.north) -
+            Geom.directional_distance(b.area, focused, Geom.south, Geom.north));
 }

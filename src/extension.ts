@@ -731,55 +731,47 @@ export class Ext extends Ecs.System<ExtEvent> {
         return this.get_window(display.get_focus_window());
     }
 
-    /** Cycles through the stack which the focused window belongs to, or shifts focus
-     *
-     * Every window of the stack takes its turn in front of the others, forwards
-     * with the keys which point down or right, and the whole stack is displayed
-     * again by the press after the last of its windows was displayed in front.
-     *
-     * The keys of an axis which has windows beside the stack keep moving the focus
-     * to them, which leaves the cycle of the stack to the keys of the other axis: a
-     * stack which has windows to its left or right is cycled with the vertical
-     * keys, and a stack which has windows above or below it is cycled with the
-     * horizontal keys. A stack which has windows in both axes is not cycled at all,
-     * and one which has none beside it is cycled by every direction key.
+    /** Shifts focus along axes with neighbours, including on other monitors.
+     * Unoccupied axes cycle the pile; singleton piles always shift focus.
      */
     stack_cycle(direction: Tiling.Direction) {
         // The keys which point down or right display the next window of the pile.
         const next = direction === Tiling.Direction.Right || direction === Tiling.Direction.Down;
+        const focused = this.focus_window();
 
         /** Fetches the closest window in the pressed direction */
         const select = (filter?: (window: Window.ShellWindow) => boolean) => {
             switch (direction) {
                 case Tiling.Direction.Left:
-                    return this.focus_selector.left(this, null, filter);
+                    return this.focus_selector.left(this, focused, filter);
                 case Tiling.Direction.Right:
-                    return this.focus_selector.right(this, null, filter);
+                    return this.focus_selector.right(this, focused, filter);
                 case Tiling.Direction.Up:
-                    return this.focus_selector.up(this, null, filter);
+                    return this.focus_selector.up(this, focused, filter);
                 case Tiling.Direction.Down:
-                    return this.focus_selector.down(this, null, filter);
+                    return this.focus_selector.down(this, focused, filter);
             }
         };
 
-        const focused = this.focus_window();
-        const found = focused === null ? null : this.auto_tiler?.find_stack(focused.entity) ?? null;
-        const stack = found === null ? null : (found[1].inner as node.NodeStack);
-        const container = stack === null ? null : this.auto_tiler?.forest.stacks.get(stack.idx) ?? null;
+        const container = focused === null || focused.stack === null
+            ? null : this.auto_tiler?.forest.stacks.get(focused.stack) ?? null;
 
-        if (stack === null || container === null) {
+        if (focused === null || container === null || container.entities.length === 1) {
             this.activate_window(select());
             return;
         }
 
-        const idx = stack.idx;
+        const idx = focused.stack;
         const sideways = direction === Tiling.Direction.Left || direction === Tiling.Direction.Right;
 
-        // The windows of the stack are not around it.
-        const outside = (window: Window.ShellWindow) => window.stack !== idx;
+        // Use the same tile areas to detect neighbours and select the target.
+        const neighbour = (window: Window.ShellWindow) => {
+            if (window.stack === idx || window.meta.minimized) return false;
+            return shares_band(container.rect, Focus.window_area(this, window), sideways);
+        };
 
-        if (this.stack_has_neighbours(container, outside, sideways)) {
-            this.activate_window(select(outside));
+        if (this.active_window_list().some(neighbour)) {
+            this.activate_window(select(neighbour));
             return;
         }
 
@@ -799,30 +791,6 @@ export class Ext extends Ecs.System<ExtEvent> {
         // is cycled again rather than leaving the key press without an effect.
         container.reset_cycle();
         cycle();
-    }
-
-    /** Whether the windows around a stack lie beside it, or above and below it
-     *
-     * The area which the stack occupies is compared with the windows around it,
-     * rather than the window which it displays in front, as the offsets of the
-     * pile place that window inside of the area.
-     */
-    private stack_has_neighbours(
-        container: Stack,
-        outside: (window: Window.ShellWindow) => boolean,
-        sideways: boolean,
-    ): boolean {
-        const area = container.rect;
-
-        for (const window of this.windows.values()) {
-            if (!outside(window) || window.meta.minimized) continue;
-            if (window.meta.get_monitor() !== container.monitor) continue;
-            if (window.workspace_id() !== container.workspace) continue;
-
-            if (shares_band(area, window.rect(), sideways)) return true;
-        }
-
-        return false;
     }
 
     /// Fetches the window component from the entity associated with the metacity window metadata.
@@ -1021,11 +989,11 @@ export class Ext extends Ecs.System<ExtEvent> {
                 prev.workspace_id() === win.workspace_id()
             ) {
                 if (prev.rect().contains(win.rect())) {
-                    if (prev.is_maximized()) {
+                    if (this.settings.unmaximize_on_focus() && prev.is_maximized()) {
                         prev.meta.unmaximize();
                     }
                 } else if (prev.stack !== null) {
-                    prev.meta.unmaximize();
+                    if (this.settings.unmaximize_on_focus()) prev.meta.unmaximize();
                     this.auto_tiler.forest.stacks.get(prev.stack)?.restack();
                 }
             }
@@ -1052,17 +1020,15 @@ export class Ext extends Ecs.System<ExtEvent> {
     }
 
     on_tile_attach(entity: Entity, window: Entity) {
-        if (this.auto_tiler) {
-            if (!this.auto_tiler.attached.contains(window)) {
-                this.windows.with(window, (w) => {
-                    if (w.prev_rect === null) {
-                        w.prev_rect = w.meta.get_frame_rect();
-                    }
-                });
+        const tiler = this.auto_tiler;
+        if (!tiler) return;
+        this.windows.with(window, (w) => {
+            w.reassignment = false;
+            if (!tiler.attached.contains(window) && w.prev_rect === null) {
+                w.prev_rect = w.meta.get_frame_rect();
             }
-
-            this.auto_tiler.attached.insert(window, entity);
-        }
+        });
+        tiler.attached.insert(window, entity);
     }
 
     on_tile_detach(win: Entity) {
@@ -1146,6 +1112,8 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     /** Unmaximize any maximized windows on the same workspace. */
     unmaximize_workspace(win: Window.ShellWindow) {
+        if (!this.settings.unmaximize_on_focus()) return;
+
         if (this.auto_tiler) {
             let mon;
             let work;
@@ -1314,7 +1282,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                             }
                         }
 
-                        let top_level = forest.find_toplevel(this.workspace_id());
+                        let top_level = forest.find_toplevel(this, this.workspace_id(win));
                         if (top_level) {
                             crect.clamp((forest.forks.get(top_level) as Fork).area);
                         }
@@ -1844,14 +1812,15 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.window_animations.cancel(win);
         if (this.auto_tiler && !this.contains_tag(win.entity, Tags.Floating)) {
             const id = this.workspace_id(win);
-            const prev_id = this.monitors.get(win.entity);
-            if (!prev_id || id[0] != prev_id[0] || id[1] != prev_id[1]) {
+            const parent = this.auto_tiler.get_parent_fork(win.entity);
+            this.monitors.insert(win.entity, id);
+            // Geometry callbacks can already have refreshed the position cache.
+            // Membership in the layout tree decides whether attachment must change.
+            if (win.is_tilable(this) && (!parent || parent.monitor !== id[0] ||
+                parent.workspace !== Lib.tiling_workspace(this, id[0], id[1]))) {
                 win.ignore_detach = true;
-                this.monitors.insert(win.entity, id);
-                if (win.is_tilable(this)) {
-                    this.auto_tiler.detach_window(this, win.entity);
-                    this.auto_tiler.attach_to_workspace(this, win, id);
-                }
+                this.auto_tiler.detach_window(this, win.entity);
+                this.auto_tiler.attach_to_workspace(this, win, id);
             }
 
             if (win.meta.minimized) {
@@ -1887,6 +1856,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         if (this.auto_tiler) {
             for (const [entity, monitor] of this.auto_tiler.forest.toplevel.values()) {
+                if (this.should_ignore_workspace(monitor[0])) continue;
                 if (condition(monitor[1])) {
                     const value = modify(monitor[1]);
                     monitor[1] = value;
@@ -2070,6 +2040,15 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         if (this.settings.mutter) {
             this.connect(this.settings.mutter, 'changed::workspaces-only-on-primary', () => {
+                this.register_fn(() => {
+                    if (!this.auto_tiler) return;
+                    const primary = display.get_primary_monitor();
+                    for (const window of this.windows.values()) {
+                        if (window.meta.get_monitor() !== primary && !window.meta.minimized) {
+                            this.on_workspace_changed(window);
+                        }
+                    }
+                });
                 this.register(Events.global(GlobalEvent.MonitorsChanged));
             });
         }
@@ -2585,19 +2564,23 @@ export class Ext extends Ecs.System<ExtEvent> {
             }
         };
 
-        type Migration = [Fork, number, Rectangle, boolean];
+        type Migration = [entity: Entity, monitor: number, area: Rectangle, find_workspace: boolean];
 
-        let migrations: Array<Migration> = new Array();
+        const migrations: Array<Migration> = [];
 
         const apply_migrations = (assigned_monitors: Set<number>) => {
-            if (!migrations) return;
-
             new exec.OnceExecutor<Migration, Migration[]>(migrations).start(
                 500,
-                ([fork, new_monitor, workspace, find_workspace]) => {
+                ([entity, new_monitor, area, find_workspace]) => {
+                    if (this.auto_tiler?.forest !== forest) return false;
+                    // Closing or relocating windows can retire a queued root.
+                    const fork = forest.forks.get(entity);
+                    if (!fork) return true;
                     let new_workspace;
 
-                    if (find_workspace) {
+                    if (this.should_ignore_workspace(new_monitor)) {
+                        new_workspace = 0;
+                    } else if (find_workspace) {
                         if (assigned_monitors.has(new_monitor)) {
                             [new_workspace] = this.find_unused_workspace(new_monitor);
                         } else {
@@ -2608,8 +2591,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                         new_workspace = fork.workspace;
                     }
 
-                    fork.migrate(this, forest, workspace, new_monitor, new_workspace);
-                    fork.set_ratio(fork.length() / 2);
+                    fork.migrate(this, forest, area, new_monitor, new_workspace);
 
                     return true;
                 },
@@ -2677,56 +2659,46 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         // Delay actions in case of temporary connection loss
         this.displays_updating = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
-            (() => {
-                if (!this.auto_tiler) return;
+            this.displays_updating = null;
+            if (this.auto_tiler?.forest !== forest) return false;
+            const assigned_monitors = new Set<number>();
 
-                const toplevels = new Array();
-                const assigned_monitors = new Set<number>();
+            for (const [old_mon, new_mon] of changes) {
+                if (old_mon === new_mon) assigned_monitors.add(new_mon);
+            }
 
-                for (const [old_mon, new_mon] of changes) {
-                    if (old_mon === new_mon) assigned_monitors.add(new_mon);
-                }
+            for (const f of forest.forks.values()) {
+                if (f.is_toplevel) {
 
-                for (const f of forest.forks.values()) {
-                    if (f.is_toplevel) {
-                        toplevels.push(f);
+                    let migration: Migration | null = null;
 
-                        let migration: null | [Fork, number, Rectangle, boolean] = null;
+                    const displays = this.displays[1];
 
-                        const displays = this.displays[1];
+                    for (const [old_monitor, new_monitor] of changes) {
+                        const display = displays.get(new_monitor);
 
-                        for (const [old_monitor, new_monitor] of changes) {
-                            const display = displays.get(new_monitor);
+                        if (!display) continue;
 
-                            if (!display) continue;
-
-                            if (f.monitor === old_monitor) {
-                                f.monitor = new_monitor;
-                                f.workspace = 0;
-                                migration = [f, new_monitor, display.ws, true];
-                            }
-                        }
-
-                        if (!migration) {
-                            const display = displays.get(f.monitor);
-                            if (display) {
-                                migration = [f, f.monitor, display.ws, false];
-                            }
-                        }
-
-                        if (migration) {
-                            mark_for_reassignment(this, migration[0].entity);
-                            migrations.push(migration);
+                        if (f.monitor === old_monitor) {
+                            migration = [f.entity, new_monitor, display.ws, true];
                         }
                     }
+
+                    if (!migration) {
+                        const display = displays.get(f.monitor);
+                        if (display) {
+                            migration = [f.entity, f.monitor, display.ws, false];
+                        }
+                    }
+
+                    if (migration) {
+                        mark_for_reassignment(this, migration[0]);
+                        migrations.push(migration);
+                    }
                 }
+            }
 
-                apply_migrations(assigned_monitors);
-
-                return;
-            })();
-
-            this.displays_updating = null;
+            apply_migrations(assigned_monitors);
             return false;
         });
     }
@@ -2826,7 +2798,8 @@ export class Ext extends Ecs.System<ExtEvent> {
 
     /// Returns the tilable window(s) that the mouse pointer is currently hovering above.
     *windows_at_pointer(cursor: Rectangle, monitor: number, workspace: number): IterableIterator<Window.ShellWindow> {
-        for (const entity of this.monitors.find((m) => m[0] == monitor && m[1] == workspace)) {
+        const shared = this.should_ignore_workspace(monitor);
+        for (const entity of this.monitors.find((m) => m[0] === monitor && (shared || m[1] === workspace))) {
             let window = this.windows.with(entity, (window) => {
                 return window.is_tilable(this) && window.rect().contains(cursor) ? window : null;
             });

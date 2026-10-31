@@ -313,6 +313,7 @@ declare namespace Meta {
         get_wm_class_instance(): string | null;
         get_work_area_for_monitor(monitor: number): null | Rectangular;
         get_workspace(): Workspace;
+        located_on_workspace(workspace: Workspace): boolean;
         has_focus(): boolean;
         is_above(): boolean;
         is_attached_dialog(): boolean;

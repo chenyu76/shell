@@ -168,6 +168,17 @@ check('activation swaps the selected window with the front and survives a rebuil
     assert.deepEqual(rectangles(s.windows), before);
 });
 
+check('queued events from an older entity generation cannot activate or remove a reused slot', () => {
+    const s = scenario([32, 32], AREA, ['a', 'b', 'c']);
+    const stale = [s.windows[0].entity[0], s.windows[0].entity[1] - 1];
+    const before = order(s);
+    s.stack.activate(stale);
+    assert.deepEqual(order(s), before);
+    assert.equal(s.stack.remove(stale), null);
+    assert.deepEqual(order(s), before);
+    assertLayout(s);
+});
+
 check('switching back before queued movement runs keeps the final slots', () => {
     const s = scenario([32, 32], AREA, ['a', 'b', 'c']);
     const pending = new Map();

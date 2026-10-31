@@ -2,6 +2,7 @@ import * as log from './log.js';
 import * as rectangle from './rectangle.js';
 
 import type { Rectangle } from './rectangle.js';
+import type { Ext } from './extension.js';
 
 import Meta from 'gi://Meta';
 import St from 'gi://St';
@@ -15,6 +16,11 @@ export interface SizeHint {
 export enum Orientation {
     HORIZONTAL = 0,
     VERTICAL = 1,
+}
+
+/** Secondary displays without workspaces share one tiling tree. */
+export function tiling_workspace(ext: Ext, monitor: number, workspace: number): number {
+    return ext.should_ignore_workspace(monitor) ? 0 : workspace;
 }
 
 export function nth_rev<T>(array: Array<T>, nth: number): T | null {

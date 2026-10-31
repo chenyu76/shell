@@ -65,6 +65,8 @@ export class ShellWindow {
     known_workspace: number;
     grab: boolean = false;
     activate_after_move: boolean = false;
+    /** New windows need an initial layout; startup windows already have one. */
+    initial_layout_complete: boolean;
     ignore_detach: boolean = false;
     /** Container identity prevents restoring into a reused arena slot. */
     was_attached_to?: Stack;
@@ -103,6 +105,7 @@ export class ShellWindow {
         this.entity = entity;
         this.meta = window;
         this.ext = ext;
+        this.initial_layout_complete = ext.init;
 
         this.known_workspace = this.workspace_id();
 
@@ -505,12 +508,7 @@ export class ShellWindow {
     }
 
     same_workspace() {
-        const workspace = this.meta.get_workspace();
-        if (workspace) {
-            let workspace_id = workspace.index();
-            return workspace_id === global.workspace_manager.get_active_workspace_index();
-        }
-        return false;
+        return this.meta.located_on_workspace(global.workspace_manager.get_active_workspace());
     }
 
     same_monitor() {
@@ -692,6 +690,11 @@ export class ShellWindow {
     }
 
     private window_raised() {
+        // Already focused clicks have no focus notification. Unfocused raises
+        // can come from deferred activation and must not change the selected slot.
+        if (this.stack !== null && this.meta.has_focus()) {
+            this.ext.auto_tiler?.forest.stacks.get(this.stack)?.activate(this.entity);
+        }
         this.restack(RESTACK_STATE.RAISED);
         this.ext.show_border_on_focused();
     }

@@ -17,7 +17,27 @@ const { Rectangle } = await import('../target/rectangle.js');
 const { Tiler, Direction } = await import('../target/tiling.js');
 const { Orientation } = await import('../target/lib.js');
 const { Keybindings } = await import('../target/keybindings.js');
+const { FocusSelector } = await import('../target/focus.js');
 const Tags = await import('../target/tags.js');
+
+for (const index of [0, 1]) {
+    const world = new World();
+    const storage = world.register_storage();
+    const entities = Array.from({ length: 2 }, () => world.create_entity());
+    const previous = entities[index];
+    const snapshot = [...previous];
+    storage.insert(previous, 'previous');
+    world.delete_entity(previous);
+    const replacement = world.create_entity();
+    storage.insert(replacement, 'replacement');
+    assert.deepEqual(previous, snapshot, 'Reusing a slot must not rewrite an outstanding entity ID');
+    assert.deepEqual(replacement, [snapshot[0], snapshot[1] + 1]);
+    assert.equal(storage.get(previous), null);
+    assert.equal(storage.get(replacement), 'replacement');
+    assert.equal(world.capacity, 2, 'Slot zero must be reused like any other slot');
+    assert.equal(world.length, 2);
+}
+console.log('ok  entity reuse preserves old IDs and rejects stale component lookups, including slot zero');
 
 const ext = Object.assign(new World(), {
     dpi: 1, gap_outer: 8, gap_inner: 8, gap_inner_half: 4, grab_op: null,
@@ -25,6 +45,7 @@ const ext = Object.assign(new World(), {
     settings: {
         smart_gaps: () => false, stack_offset_x: () => 12, stack_offset_y: () => 40,
         workspaces_only_on_primary: () => false, stacking_with_mouse: () => true,
+        unmaximize_on_focus: () => true,
     },
     conf: { window_has_pile_title: () => false, window_shall_float: () => false },
     monitor_work_area: monitor => new Rectangle([monitor * 1000, 0, 1000, 800]),
@@ -53,7 +74,7 @@ ext.auto_tiler = tiler;
 function makeWindow(monitor = 0, workspace = 0) {
     const entity = ext.create_entity();
     let rect = new Rectangle([monitor * 1000 + 50, 50, 420, 310]);
-    const state = { minimized: false, maximized: false, fullscreen: false };
+    const state = { minimized: false, maximized: false, fullscreen: false, moves: [] };
     const actor = new Widget();
     const meta = Object.assign(new Window(), {
         connect: () => 1, disconnect() {}, raise() {},
@@ -72,7 +93,11 @@ function makeWindow(monitor = 0, workspace = 0) {
         actor_exists: () => true, same_workspace: () => workspace === 0,
         is_maximized: () => state.maximized, rect: () => rect.clone(),
         title: () => 'Test', is_tilable: () => true, activate() {},
-        move(_ext, target, complete) { rect = Rectangle.from_meta(target); complete?.(); },
+        move(_ext, target, complete) {
+            rect = Rectangle.from_meta(target);
+            state.moves.push(rect.clone());
+            complete?.();
+        },
     };
     ext.windows.insert(entity, window);
     ext.monitors.insert(entity, [monitor, workspace]);
@@ -313,14 +338,19 @@ tiler.attach_to_monitor(ext, nested[0], [8, 0], false);
 for (let i = 1; i < nested.length; i++) {
     tiler.attach_to_window(ext, nested[i - 1], nested[i], { orientation: Orientation.HORIZONTAL, swap: false });
 }
-const nestedRoot = forest.find_toplevel([8, 0]);
+const nestedRoot = forest.find_toplevel(ext, [8, 0]);
 tiler.detach_window(ext, nested[0].entity);
-assert.deepEqual(forest.find_toplevel([8, 0]), nestedRoot);
+assert.deepEqual(forest.find_toplevel(ext, [8, 0]), nestedRoot);
 checkForest();
 tiler.detach_window(ext, nested[2].entity);
 checkForest();
 const remainingRoot = forest.forks.get(nestedRoot);
-remainingRoot.migrate(ext, forest, new Rectangle([9000, 0, 1000, 800]), 9, 2);
+const migrationArea = new Rectangle([9000, 0, 1500, 1100]);
+const originalMigrationArea = migrationArea.clone();
+for (const window of [nested[1], nested[3]]) window.state.moves.length = 0;
+remainingRoot.migrate(ext, forest, migrationArea, 9, 2);
+assert.ok(migrationArea.eq(originalMigrationArea), 'Migration must not modify the display work area');
+assert.equal(remainingRoot.length_left, Math.round(remainingRoot.length() / 2));
 for (const window of [nested[1], nested[3]]) {
     const pile = forest.stacks.get(window.stack);
     assert.equal(pile.monitor, 9);
@@ -328,6 +358,10 @@ for (const window of [nested[1], nested[3]]) {
     assert.equal(window.known_workspace, 2);
     assert.equal(window.state.workspace, 2);
     assert.deepEqual(ext.monitors.get(window.entity), [9, 2]);
+    assert.equal(window.state.moves.length, 1, 'Migration submits only the final layout');
+    const branch = remainingRoot.find_branch(window.entity);
+    const expected = branch === remainingRoot.left ? remainingRoot.area_of_left(ext) : remainingRoot.area_of_right(ext);
+    assert.ok(window.rect().eq(expected), 'Migration applies its new ratio before arranging windows');
 }
 checkForest();
 console.log('ok  empty leaf collapse and monitor/workspace migration preserve all pile and parent associations');
@@ -391,4 +425,69 @@ focused = null;
 bindings['pile-next']();
 checkForest();
 console.log('ok  dedicated pile shortcuts wrap in both directions beside another tile and ignore singleton or untiled windows');
+
+ext.should_ignore_workspace = monitor => monitor === 13;
+const shared = [makeWindow(13, 2), makeWindow(13, 3), makeWindow(13, 1)];
+tiler.attach_to_monitor(ext, shared[0], [13, 2], false);
+const sharedRoot = tiler.get_parent_fork(shared[0].entity);
+assert.equal(sharedRoot.workspace, 0);
+for (const window of shared.slice(1)) {
+    tiler.attach_to_workspace(ext, window, ext.workspace_id(window));
+    assert.equal(window.stack, shared[0].stack);
+}
+for (const workspace of [0, 1, 2, 3]) {
+    assert.deepEqual(forest.find_toplevel(ext, [13, workspace]), sharedRoot.entity);
+    assert.ok(shared.includes(tiler.largest_on_workspace(ext, 13, workspace)));
+}
+const sharedPile = forest.stacks.get(shared[0].stack);
+shared[1].was_attached_to = sharedPile;
+tiler.detach_window(ext, shared[1].entity);
+tiler.restore_window(ext, shared[1]);
+assert.equal(forest.stacks.get(shared[1].stack), sharedPile);
+assert.equal(sharedPile.workspace, 0);
+assert.equal([...forest.forks.values()].filter(fork => fork.is_toplevel && fork.monitor === 13).length, 1);
+keyboardTiler.move_from_stack(ext, tiler.find_stack(shared[2].entity), shared[2], Direction.Right);
+const sharedBranches = [sharedRoot.left, sharedRoot.right];
+const sharedArea = sharedRoot.area.clone();
+const migrating = [makeWindow(15, 2), makeWindow(15, 2)];
+tiler.attach_to_workspace(ext, migrating[0], [15, 2]);
+tiler.attach_to_window(ext, migrating[0], migrating[1], { auto: 0 });
+const migratingRoot = tiler.get_parent_fork(migrating[0].entity);
+migratingRoot.migrate(ext, forest, ext.monitor_work_area(13), 13, 4);
+assert.equal(forest.forks.get(migratingRoot.entity), null);
+for (const window of migrating) {
+    assert.equal(tiler.get_parent_fork(window.entity), sharedRoot);
+    assert.deepEqual(ext.monitors.get(window.entity), [13, 0]);
+    assert.equal(window.ignore_detach, false);
+}
+assert.deepEqual([sharedRoot.left, sharedRoot.right], sharedBranches, 'Merging preserves the destination tiles');
+assert.ok(sharedRoot.area.eq(sharedArea));
+assert.equal([...forest.forks.values()].filter(fork => fork.is_toplevel && fork.monitor === 13).length, 1);
+const separate = [makeWindow(14, 2), makeWindow(14, 3)];
+for (const window of separate) tiler.attach_to_workspace(ext, window, ext.workspace_id(window));
+assert.notEqual(separate[0].stack, separate[1].stack);
+assert.equal(tiler.get_parent_fork(separate[0].entity).workspace, 2);
+assert.equal(tiler.get_parent_fork(separate[1].entity).workspace, 3);
+checkForest();
+console.log('ok  secondary placement, restore and migration share one tree while workspace-enabled monitors stay isolated');
+
+const selector = new FocusSelector();
+for (const [monitor, direction, forward, backward] of [
+    [16, Direction.Right, 'right', 'left'],
+    [17, Direction.Down, 'down', 'up'],
+]) {
+    const navigation = [makeWindow(monitor), makeWindow(monitor)];
+    tiler.reset_to_pile(ext, navigation, [monitor, 0]);
+    keyboardTiler.move_from_stack(ext, tiler.find_stack(navigation[1].entity), navigation[1], direction);
+    const beforeSwap = navigation.map(window => window.rect());
+    // Queue a swap without applying its native moves, as in the Shell event loop.
+    for (const window of navigation) window.move = () => {};
+    tiler.attach_swap(ext, navigation[0].entity, navigation[1].entity);
+    assert.ok(navigation.every((window, i) => window.rect().eq(beforeSwap[i])));
+    ext.active_window_list = () => navigation;
+    assert.equal(selector[forward](ext, navigation[1]), navigation[0]);
+    assert.equal(selector[backward](ext, navigation[0]), navigation[1]);
+}
+checkForest();
+console.log('ok  directional focus follows tile ownership while a native swap is still queued');
 console.log('ALL RESET WINDOWS CHECKS PASSED');

@@ -243,7 +243,7 @@ export class Tiler {
 
                 const workspace_id = ext.workspace_id(window);
 
-                const toplevel = ext.auto_tiler.forest.find_toplevel(workspace_id);
+                const toplevel = ext.auto_tiler.forest.find_toplevel(ext, workspace_id);
 
                 if (!toplevel) return;
 

@@ -209,11 +209,7 @@ export class AutoTiler {
 
     /** Tile a window onto a workspace */
     attach_to_workspace(ext: Ext, win: ShellWindow, id: [number, number]) {
-        if (ext.should_ignore_workspace(id[0])) {
-            id = [id[0], 0];
-        }
-
-        const toplevel = this.forest.find_toplevel(id);
+        const toplevel = this.forest.find_toplevel(ext, id);
 
         if (toplevel) {
             const onto = this.forest.largest_window_on(ext, toplevel);
@@ -262,6 +258,7 @@ export class AutoTiler {
 
         for (const window of ext.windows.values()) {
             window.stack = null;
+            window.reassignment = false;
         }
 
         this.forest.stacks.truncate(0);
@@ -277,7 +274,7 @@ export class AutoTiler {
             const [monitor, workspace] = ext.workspace_id(win);
             if (target && target[1].inner.kind === NodeKind.STACK &&
                 this.forest.stacks.get(target[1].inner.idx) === previous &&
-                previous.monitor === monitor && previous.workspace === workspace) {
+                previous.monitor === monitor && previous.workspace === lib.tiling_workspace(ext, monitor, workspace)) {
                 const [fork, branch] = target;
                 this.forest.attach_stack(ext, branch.inner as node.NodeStack, fork, win.entity, true);
                 previous.activate(win.entity);
@@ -351,7 +348,7 @@ export class AutoTiler {
 
     largest_on_workspace(ext: Ext, monitor: number, workspace: number): null | ShellWindow {
         const workspace_id: [number, number] = [monitor, workspace];
-        const toplevel = this.forest.find_toplevel(workspace_id);
+        const toplevel = this.forest.find_toplevel(ext, workspace_id);
         if (toplevel) {
             return this.forest.largest_window_on(ext, toplevel);
         }
@@ -418,7 +415,7 @@ export class AutoTiler {
         const source = this.find_stack(win.entity);
         if (!source) return null;
         const [fork, branch, is_left] = source;
-        if (fork.monitor !== monitor || fork.workspace !== workspace) return null;
+        if (fork.monitor !== monitor || fork.workspace !== lib.tiling_workspace(ext, monitor, workspace)) return null;
         const sibling = is_left ? fork.right : fork.left;
         if (branch.inner.kind === NodeKind.STACK && branch.inner.entities.length === 1 &&
             sibling?.inner.kind === NodeKind.STACK) {
@@ -601,7 +598,9 @@ export class AutoTiler {
             return Err('focused window is not attached');
         }
 
-        return onto.meta.get_monitor() == win.meta.get_monitor() && onto.workspace_id() == win.workspace_id()
+        const [monitor, workspace] = ext.workspace_id(win);
+        return onto.meta.get_monitor() === monitor &&
+            lib.tiling_workspace(ext, monitor, onto.workspace_id()) === lib.tiling_workspace(ext, monitor, workspace)
             ? Ok(onto)
             : Err('window is not on the same monitor or workspace');
     }

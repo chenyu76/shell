@@ -201,6 +201,7 @@ export class Forest extends Ecs.World {
 
     /** Create a new top level fork */
     create_toplevel(ext: Ext, windows: ReadonlyArray<Entity>, area: Rectangle, id: [MonitorID, WorkspaceID]): [Entity, Fork.Fork] {
+        id = [id[0], Lib.tiling_workspace(ext, id[0], id[1])];
         const leaf = this.create_stack(ext, windows, id[1], id[0]);
         const [entity, fork] = this.create_fork(leaf, null, area, id[1], id[0]);
         for (const window of windows) this.on_attach(entity, window);
@@ -279,11 +280,10 @@ export class Forest extends Ecs.World {
         return fmt;
     }
 
-    /** Finds the top level fork associated with the given entity. */
-    find_toplevel([src_mon, src_work]: [number, number]): Entity | null {
-        for (const [entity, fork] of this.forks.iter()) {
-            if (!fork.is_toplevel) continue;
-            const { monitor, workspace } = fork;
+    /** Finds the layout tree for a monitor and workspace. */
+    find_toplevel(ext: Ext, [src_mon, src_work]: [number, number]): Entity | null {
+        src_work = Lib.tiling_workspace(ext, src_mon, src_work);
+        for (const [entity, [monitor, workspace]] of this.toplevel.values()) {
             if (monitor == src_mon && workspace == src_work) {
                 return entity;
             }

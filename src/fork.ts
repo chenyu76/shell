@@ -205,34 +205,38 @@ export class Fork {
 
     migrate(ext: Ext, forest: Forest, area: Rectangle, monitor: number, workspace: number) {
         if (ext.auto_tiler && this.is_toplevel) {
+            workspace = Lib.tiling_workspace(ext, monitor, workspace);
+            const destination = ext.should_ignore_workspace(monitor) ? forest.find_toplevel(ext, [monitor, workspace]) : null;
+            const merge = destination !== null && !Ecs.entity_eq(destination, this.entity);
             const primary = global.display.get_primary_monitor() === monitor;
 
-            this.monitor = monitor;
-            this.workspace = workspace;
-            this.on_primary_display = primary;
+            const blocked: Array<ShellWindow> = [];
 
-            let blocked = new Array();
-
-            forest.toplevel.set(forest.string_reps.get(this.entity) as string, [this.entity, [monitor, workspace]]);
+            if (!merge) {
+                this.monitor = monitor;
+                this.workspace = workspace;
+                this.on_primary_display = primary;
+                forest.toplevel.set(forest.string_reps.get(this.entity) as string, [this.entity, [monitor, workspace]]);
+            }
 
             for (const child of forest.iter(this.entity)) {
                 switch (child.inner.kind) {
-                    case 1:
+                    case node.NodeKind.FORK:
+                        if (merge) break;
                         const cfork = forest.forks.get(child.inner.entity);
                         if (!cfork) continue;
                         cfork.workspace = workspace;
                         cfork.monitor = monitor;
                         cfork.on_primary_display = primary;
                         break;
-                    case 3:
+                    case node.NodeKind.STACK:
+                        const stack = forest.stacks.get(child.inner.idx);
+                        if (stack && !merge) {
+                            stack.workspace = workspace;
+                            stack.monitor = monitor;
+                        }
                         for (const entity of child.inner.entities) {
-                            let stack = ext.auto_tiler.forest.stacks.get(child.inner.idx);
-                            if (stack) {
-                                stack.workspace = workspace;
-                                stack.monitor = monitor;
-                            }
-
-                            let window = ext.windows.get(entity);
+                            const window = ext.windows.get(entity);
 
                             if (window) {
                                 ext.size_signals_block(window);
@@ -246,14 +250,24 @@ export class Fork {
                 }
             }
 
-            area.x += ext.gap_outer;
-            area.y += ext.gap_outer;
-            area.width -= ext.gap_outer * 2;
-            area.height -= ext.gap_outer * 2;
+            if (merge) {
+                // A workspace-independent display cannot retain a second tree.
+                for (const window of blocked) {
+                    window.ignore_detach = true;
+                    ext.auto_tiler.detach_window(ext, window.entity, false);
+                    ext.auto_tiler.attach_to_workspace(ext, window, [monitor, workspace]);
+                }
+            } else {
+                const target_area = area.clone();
+                target_area.x += ext.gap_outer;
+                target_area.y += ext.gap_outer;
+                target_area.width -= ext.gap_outer * 2;
+                target_area.height -= ext.gap_outer * 2;
 
-            this.set_area(area.clone());
-            this.measure(forest, ext, area);
-            forest.arrange(ext);
+                this.set_area(target_area);
+                this.set_ratio(this.length() / 2);
+                forest.tile(ext, this, target_area);
+            }
 
             for (const window of blocked) {
                 ext.size_signals_unblock(window);

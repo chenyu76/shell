@@ -25,6 +25,7 @@ node scripts/reset-windows-check.mjs
 
 These cover pile geometry, focus and grab ordering, title lifecycle, workspace-isolated reset,
 shared pile/tree membership through add/remove/swap operations, directional detachment,
+focus in all four directions while a native swap is queued, entity ID reuse,
 and animation timing, constraints and cleanup. They do not validate actual rendering.
 
 The full-extension close/focus regression can also run in an isolated headless GNOME session
@@ -34,6 +35,7 @@ The full-extension close/focus regression can also run in an isolated headless G
 python3 scripts/pile-close-runtime-check.py
 python3 scripts/constrained-window-runtime-check.py
 python3 scripts/pile-grab-runtime-check.py
+python3 scripts/multi-monitor-runtime-check.py
 ```
 
 This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
@@ -46,6 +48,17 @@ The grab check delivers focus/grab callbacks explicitly in the headless session 
 window geometry for six scenarios: queued focus swaps, clicks without displacement, short drags,
 keyboard movement and resizing. It checks that the whole pile waits during the grab and is restored
 after release; it does not simulate physical mouse input.
+
+The multi-monitor check uses two virtual displays. It verifies navigation between singleton
+and multi-window piles, cycling on the free axis, drops onto the shared secondary layout
+after a workspace switch, and clicks which raise a window without changing focus, both
+with and without a grab. It also checks migration into a populated secondary display,
+regrouping existing windows when workspace mode changes, and workspace reindexing.
+Workspace events are checked with both a stale position cache and a cache already
+updated by geometry processing: membership and pile order follow the layout tree.
+Navigation uses real Mutter focus changes. Shell focus and native grab callbacks are
+delivered explicitly because the headless compositor has no interactive seat. Conditions
+are polled with a timeout instead of assuming focus has settled after a fixed delay.
 
 ## Checklists
 
@@ -79,6 +92,7 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 ### Tiling
 
 - [ ] Super direction keys changes focus in the correct direction
+- [ ] Super H/J/K/L can leave both singleton and multi-window piles for an adjacent display, with horizontal and vertical display layouts.
 - [ ] Windows moved with the keyboard tile into place
 - [ ] Windows moved with the mouse tile into place
 - [ ] A window which is dragged by less than the dead zone of the preferences returns to the tile which it came from, without re-arranging, stacking or floating, and without the placement overlay appearing.
@@ -117,6 +131,7 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Full-screen an application within the stack, then quit the application-- the remaining windows should be visible.
 - [ ] Every window of the stack is visible as a cascading pile, and the entire pile fits inside of the stack's area.
 - [ ] Clicking a window of the stack displays it completely, in front of the other windows of the stack.
+- [ ] Raising an already focused background window moves it into the front slot and leaves the other windows' edges exposed.
 - [ ] Press and hold the exposed title bar of a background window, then release without dragging: the clicked window ends in front and every other window retains an exposed edge.
 - [ ] Repeat for the back, middle and front windows, including quick clicks and slight drags within the dead zone, with both Wayland and XWayland applications.
 - [ ] A stack which has windows to its left or right is cycled with `Super` + `Up`/`Down`, while `Super` + `Left`/`Right` moves focus between the tiles.
@@ -160,6 +175,7 @@ Tasks for a tester to verify when approving a patch. Use complex window layouts 
 - [ ] Unplug a display - windows from the display retile on a new workspace on the remaining display
 - [ ] Plug an additional display into a laptop - windows and workspaces don't changes
 - [ ] NOTE: Add vertical monitor layout test
+- [ ] With workspaces only on the primary display, switch workspaces and drop windows onto the secondary display: windows join its existing layout and keep exposed pile edges.
 
 ### Launcher
 

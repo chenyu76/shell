@@ -20,6 +20,7 @@ interface AppWidgets {
     show_skip_taskbar: any;
     smart_gaps: any;
     snap_to_grid: any;
+    unmaximize_on_focus: any;
     stack_offset_x: any;
     stack_offset_y: any;
     window_titles: any;
@@ -73,6 +74,8 @@ function settings_dialog_new(): Gtk.Container {
         ext.set_smart_gaps(state);
         Settings.sync();
     });
+
+    ext.ext.bind('unmaximize-on-focus', app.unmaximize_on_focus, 'active', Gio.SettingsBindFlags.DEFAULT);
 
     app.outer_gap.set_text(String(ext.gap_outer()));
     app.outer_gap.connect('activate', (widget: any) => {
@@ -237,6 +240,7 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         stacking_with_mouse: new Gtk.Switch({ halign: Gtk.Align.END }),
         smart_gaps: new Gtk.Switch({ halign: Gtk.Align.END }),
         snap_to_grid: new Gtk.Switch({ halign: Gtk.Align.END }),
+        unmaximize_on_focus: new Gtk.Switch({ halign: Gtk.Align.END }),
         window_titles: new Gtk.Switch({ halign: Gtk.Align.END }),
         show_skip_taskbar: new Gtk.Switch({ halign: Gtk.Align.END }),
         mouse_cursor_follows_active_window: new Gtk.Switch({ halign: Gtk.Align.END }),
@@ -301,6 +305,15 @@ function settings_dialog_view(): [AppWidgets, Gtk.Container] {
         ['Active Border Radius', settings.active_hint_border_radius],
         ['Active Hint Color', settings.hint_color],
     ]);
+
+    grid.attach(new Gtk.Label({
+        label: 'Unmaximize windows when focusing or opening another window',
+        xalign: 0.0,
+        wrap: true,
+        max_width_chars: 45,
+        tooltip_text: 'Disable to keep windows maximized during focus changes and automatic layout updates.',
+    }), 0, 21, 1, 1);
+    grid.attach(settings.unmaximize_on_focus, 1, 21, 1, 1);
 
     return [settings, grid];
 }

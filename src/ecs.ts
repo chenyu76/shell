@@ -14,7 +14,7 @@ import { Executor } from './executor.js';
 export type Entity = [number, number];
 
 export function entity_eq(a: Entity, b: Entity): boolean {
-    return a[0] == b[0] && b[1] == b[1];
+    return a[0] === b[0] && a[1] === b[1];
 }
 
 export function entity_new(pos: number, gen: number): Entity {
@@ -195,17 +195,17 @@ export class World {
     ///
     /// Find the first available slot, and increment the generation.
     create_entity(): Entity {
-        let slot = this.free_slots.pop();
-
-        if (slot) {
-            var entity = this.entities_[slot];
-            entity[1] += 1;
-        } else {
-            var entity = entity_new(this.capacity, 0);
-            this.entities_.push(entity);
-            this.tags_.push(new Set());
+        const slot = this.free_slots.pop();
+        if (slot !== undefined) {
+            // Queued events keep the ID of the generation which created them.
+            const entity = entity_new(slot, this.entities_[slot][1] + 1);
+            this.entities_[slot] = entity;
+            return entity;
         }
 
+        const entity = entity_new(this.capacity, 0);
+        this.entities_.push(entity);
+        this.tags_.push(new Set());
         return entity;
     }
 
