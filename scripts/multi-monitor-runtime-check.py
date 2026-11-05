@@ -13,6 +13,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {AutoTiler} from '../pop-shell@system76.com/auto_tiler.js';
 import {Direction} from '../pop-shell@system76.com/tiling.js';
+import {Orientation} from '../pop-shell@system76.com/lib.js';
 import {Rectangle} from '../pop-shell@system76.com/rectangle.js';
 import {entity_eq} from '../pop-shell@system76.com/ecs.js';
 
@@ -68,6 +69,7 @@ export default class MultiMonitorCheck extends Extension {
         const [a, b, c] = windows;
         const primary = global.display.get_primary_monitor(), secondary = 1 - primary;
         check(global.display.get_n_monitors() === 2, 'Two virtual monitors are required');
+        await this.check_directions(windows, primary);
         for (const window of windows) {
             window.ignore_detach = true;
             at.detach_window(ext, window.entity);
@@ -87,10 +89,10 @@ export default class MultiMonitorCheck extends Extension {
         await this.navigate(b, inward, primaryFront);
         pass('directions cross monitors from both multi-window and singleton piles');
 
-        const front = forest.stacks.get(a.stack).active;
-        await this.navigate(ext.windows.get(front), Direction.Down);
-        check(forest.stacks.get(a.stack).active !== front, 'Free axis did not cycle the pile');
-        pass('the free axis still cycles a pile beside another monitor');
+        const primaryPile = forest.stacks.get(a.stack);
+        const otherPrimary = ext.windows.get(primaryPile.entities.find(entity => !entity_eq(entity, primaryFront.entity)));
+        await this.navigate(primaryFront, inward, otherPrimary);
+        pass('the empty direction cycles despite a neighbour on the opposite monitor');
 
         // Keep one primary window on the new workspace and drop it onto the
         // workspace-independent secondary monitor through the real drop path.
@@ -185,12 +187,65 @@ export default class MultiMonitorCheck extends Extension {
         pass('workspace reindexing preserves the secondary tree');
     }
 
-    async focus(window) {
-        window.activate(false);
+    async check_directions(windows, monitor) {
+        const ext = this.ext, at = ext.auto_tiler;
+        const [a, b, neighbour] = windows;
+        for (const [occupied, empty, name] of [
+            [Direction.Left, Direction.Right, 'left'],
+            [Direction.Right, Direction.Left, 'right'],
+            [Direction.Up, Direction.Down, 'up'],
+            [Direction.Down, Direction.Up, 'down'],
+        ]) {
+            for (const window of windows) {
+                window.ignore_detach = true;
+                at.detach_window(ext, window.entity);
+                window.meta.move_to_monitor(monitor);
+            }
+            for (const window of [a, b]) at.attach_to_workspace(ext, window, [monitor, 0]);
+            at.attach_to_window(ext, a, neighbour, {
+                orientation: occupied === Direction.Left || occupied === Direction.Right
+                    ? Orientation.HORIZONTAL : Orientation.VERTICAL,
+                swap: occupied === Direction.Left || occupied === Direction.Up,
+            });
+            const pile = at.forest.stacks.get(a.stack);
+            check(pile.entities.length === 2 && b.stack === a.stack && neighbour.stack !== a.stack,
+                'The layout must contain a two-window pile and a separate neighbour');
+            const source = ext.windows.get(pile.active);
+            await this.navigate(source, occupied, neighbour);
+            check(entity_eq(pile.active, source.entity), 'Leaving the pile changed its order');
+            pass('focus moves to the ' + name + ' neighbour');
+
+            await this.focus(source);
+            let current = source;
+            for (let i = 0; i < 3; i++) {
+                const next = ext.windows.get(pile.entities.find(entity => !entity_eq(entity, current.entity)));
+                ext.stack_cycle(empty);
+                await this.settle_focus(next);
+                check(entity_eq(pile.active, next.entity), 'Empty direction did not rotate the pile');
+                current = next;
+            }
+            pass('the opposite direction cycles and wraps despite the ' + name + ' neighbour');
+        }
+    }
+
+    async settle_focus(window) {
         await wait_for('focus on ' + window.title(), () => window.meta.has_focus());
         // Headless Mutter changes focus, but has no seat to deliver Shell's callback.
         this.ext.on_focused(window);
-        await wait_for('focused layout', () => this.ext.movements.is_empty());
+        // Queue draining precedes Wayland commits and the end of the focus animation.
+        await wait_for('focused layout', () => {
+            const pile = this.ext.auto_tiler.forest.stacks.get(window.stack);
+            const actor = window.meta.get_compositor_private();
+            return this.ext.movements.is_empty() &&
+                Rectangle.from_meta(pile.area_from_window(window.rect())).eq(pile.rect) &&
+                actor.opacity === 255 && actor.scale_x === 1 && actor.scale_y === 1 &&
+                actor.translation_x === 0 && actor.translation_y === 0;
+        });
+    }
+
+    async focus(window) {
+        window.activate(false);
+        await this.settle_focus(window);
     }
 
     async navigate(source, direction, expected) {
@@ -198,8 +253,7 @@ export default class MultiMonitorCheck extends Extension {
         await this.focus(source);
         ext.stack_cycle(direction);
         const target = expected ?? ext.windows.get(ext.auto_tiler.forest.stacks.get(source.stack).active);
-        await wait_for('directional focus on ' + target.title(), () => target.meta.has_focus());
-        ext.on_focused(target);
+        await this.settle_focus(target);
     }
 
     disable() { AutoTiler.prototype.reset_to_pile = this.original; }
@@ -209,4 +263,4 @@ export default class MultiMonitorCheck extends Extension {
 
 if __name__ == '__main__':
     client = Path(__file__).with_name('pile-runtime-client.mjs').read_text()
-    run(client, CHECK, 'multi-monitor-check', 8, seconds=18, monitors=('1280x900', '1280x900'))
+    run(client, CHECK, 'multi-monitor-check', 16, seconds=24, monitors=('1280x900', '1280x900'))

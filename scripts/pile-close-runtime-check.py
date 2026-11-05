@@ -117,4 +117,4 @@ export default class PileCloseCheck extends Extension {
 
 if __name__ == '__main__':
     run(Path(__file__).with_name('pile-runtime-client.mjs').read_text(), CHECK, 'pile-close-check', 2,
-        seconds=14, full_extension=True)
+        seconds=14)

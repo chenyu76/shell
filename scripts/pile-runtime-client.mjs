@@ -7,6 +7,5 @@ const windows = ['Pile A', 'Pile B', 'Pile C'].map(title => {
     window.present();
     return window;
 });
-const loop = new GLib.MainLoop(null, false);
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10000, () => { loop.quit(); return false; });
-loop.run();
+// The harness bounds the session; keep clients alive until the compositor exits.
+new GLib.MainLoop(null, false).run();

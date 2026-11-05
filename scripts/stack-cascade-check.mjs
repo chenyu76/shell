@@ -19,7 +19,6 @@ globalThis.global = {
     workspace_manager: { get_active_workspace_index: () => 0 },
     window_group: {
         add_child: () => {},
-        get_parent: () => null,
         set_child_above_sibling: () => {},
     },
 };
@@ -95,8 +94,7 @@ function make_ext(offsets, titled = new Array()) {
         size_signals_unblock: () => {},
         show_border_on_focused: () => {},
         active_workspace: () => 0,
-        register: () => {},
-        movements: { insert: () => {}, get: () => null },
+        movements: { get: () => null },
     };
 }
 

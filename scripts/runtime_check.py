@@ -38,7 +38,8 @@ def run_session(root, marker, passes, seconds, full_extension, monitors):
     print(f'PASS: {marker} ({passes} scenarios)')
 
 
-def run(client_source, check, marker, passes, seconds=14, full_extension=True, monitors=('1280x900',)):
+def run(client_source, check, marker, passes, seconds=14, full_extension=True, monitors=('1280x900',),
+        session_modes=('user',)):
     build = Path(__file__).resolve().parents[1] / '_build'
     root = Path(tempfile.mkdtemp(prefix='pop-shell-check-'))
     (root / 'runtime').mkdir(mode=0o700)
@@ -51,6 +52,7 @@ def run(client_source, check, marker, passes, seconds=14, full_extension=True, m
         'uuid': test.name, 'name': 'Pop Shell regression check',
         'description': 'Isolated Wayland regression test',
         'shell-version': json.loads(build.joinpath('metadata.json').read_text())['shell-version'],
+        'session-modes': session_modes,
     }))
     test.joinpath('extension.js').write_text(check)
     client = root / 'client.js'

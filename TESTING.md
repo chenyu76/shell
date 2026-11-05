@@ -1,234 +1,73 @@
 # Testing
 
-This document provides a guideline for testing and verifying the expected behaviors of the project. When a patch is ready for testing, the checklists may be copied and marked as they are proven to be working.
+## Build and Node checks
+
+Build once before running checks. Node checks use the compiled modules and stub
+only the GNOME boundary; they do not verify rendering or native event delivery.
+
+```sh
+make compile
+node scripts/stack-cascade-check.mjs
+node scripts/reset-windows-check.mjs
+node scripts/window-animation-check.mjs
+```
+
+| Check | Coverage |
+| --- | --- |
+| `stack-cascade-check.mjs` | Pile geometry, cycling, grab ordering, titles and signal cleanup. |
+| `reset-windows-check.mjs` | Workspace isolation, tree membership, splits, swaps, migration and entity reuse. |
+| `window-animation-check.mjs` | Asynchronous geometry, constraints, retargeting, cancellation and resource cleanup. |
+
+## Native GNOME checks
+
+These require GNOME 51 with headless Wayland support, GJS, GTK 4, `dbus-run-session`
+and `timeout`. Each check uses a private D-Bus session and temporary XDG settings,
+leaving the current desktop unchanged. The harness prints the saved GNOME log path.
+
+```sh
+python3 scripts/constrained-window-runtime-check.py
+python3 scripts/pile-close-runtime-check.py
+python3 scripts/pile-grab-runtime-check.py
+python3 scripts/multi-monitor-runtime-check.py
+python3 scripts/pile-lock-runtime-check.py
+```
+
+| Check | Coverage |
+| --- | --- |
+| `constrained-window-runtime-check.py` | Minimum-sized Wayland windows still move; decorated and undecorated windows, animations on and off. |
+| `pile-close-runtime-check.py` | Closing a rotated pile's front preserves survivor origins and produces one resize animation. |
+| `pile-grab-runtime-check.py` | Clicks, short drags and move/resize grabs hold the pile still and restore its slots after release. |
+| `multi-monitor-runtime-check.py` | All four focus directions, empty-direction cycling and wraparound, cross-screen focus, shared secondary layouts, raise-only clicks and workspace changes. |
+| `pile-lock-runtime-check.py` | Lock/unlock restores overlapping native frames, including queued rotations, display reconnection and untiled movements. |
+
+Focus and grab callbacks are delivered explicitly because the headless compositor
+has no interactive seat. These checks exercise real windows and geometry but do
+not simulate physical keyboard or mouse input. The lock check deliberately moves
+native frames to the same origin while locked to verify recovery without Reset Windows.
+
+## Desktop verification
+
+Use Wayland and XWayland applications, at least two monitors, and the active hint.
+Repeat display checks with horizontal and vertical layouts and different scales.
+
+- [ ] With a neighbour on just one side, that direction leaves the pile and the other directions cycle it. Test all four sides, repeated keys and cross-screen focus.
+- [ ] Click the exposed edge of back and middle windows, including a press/release without displacement and a small titlebar drag. Every window keeps a clickable edge afterward.
+- [ ] Drag below and above the dead zone; only the latter changes placement. Drag between displays after switching workspaces.
+- [ ] Move, split, swap and resize windows with keyboard and mouse. Minimize and restore them; float and retile them; empty a pile down to its last window.
+- [ ] Close front and background windows during an animation. The remaining windows resize together without a jump or leftover snapshot.
+- [ ] Maximize, fullscreen, minimize, enter overview or disable the extension during movement. Native effects finish without a stuck transform or invisible window. Also test with system animations disabled.
+- [ ] Lock during a pile rotation, then unlock. Repeat with displays sleeping or reconnecting. Piles retain exposed edges, membership and usable shortcuts.
+- [ ] Change the primary monitor, unplug/reconnect a display, and switch workspace mode. Check placement, gaps and the active hint on each screen.
+- [ ] Reset Windows preserves the focused front window and other workspaces, including when tiling was disabled. Dialogs and windows pinned to all workspaces stay out of the reset.
+- [ ] Toggle tiling with ordinary, floating, minimized, maximized and fullscreen windows present. Hidden windows remain on their own workspaces.
+- [ ] Preferences applies pile offsets, gaps, active hint appearance and the unmaximize-on-focus option immediately and preserves them after restart.
+- [ ] Pile title rules add, update and remove drawn titles; floating exceptions still work after editing either list.
+- [ ] With tiling disabled, directional focus, movement, resizing and swaps still work. Confirm title-bar hiding and a launcher search as smoke checks.
 
 ## Logs
 
-To begin watching logs, open a terminal with the following command:
-
-```
-journalctl -o cat -n 0 -f "$(which gnome-shell)" | grep -v warning
+```sh
+journalctl -o cat -n 0 -f "$(which gnome-shell)"
 ```
 
-Note that because the logs are from GNOME Shell, there will be messages from all installed extensions, and GNOME Shell itself. Pop Shell is fairly chatty though, so the majority of the logs should be from Pop Shell. Pop Shell logs are usually prepended with `pop-shell:`, but sometimes GNOME has internal errors and warnings surrounding those logs that could be useful for pointing to an issue that we can resolve in Pop Shell.
-
-## Automated checks
-
-Build once, then run the compositor-independent regression checks:
-
-```
-make compile
-node scripts/stack-cascade-check.mjs
-node scripts/window-animation-check.mjs
-node scripts/reset-windows-check.mjs
-```
-
-These cover pile geometry, focus and grab ordering, title lifecycle, workspace-isolated reset,
-shared pile/tree membership through add/remove/swap operations, directional detachment,
-focus in all four directions while a native swap is queued, entity ID reuse,
-and animation timing, constraints and cleanup. They do not validate actual rendering.
-
-The full-extension close/focus regression can also run in an isolated headless GNOME session
-(requires GNOME Shell headless Wayland support, GJS and GTK 4):
-
-```
-python3 scripts/pile-close-runtime-check.py
-python3 scripts/constrained-window-runtime-check.py
-python3 scripts/pile-grab-runtime-check.py
-python3 scripts/multi-monitor-runtime-check.py
-```
-
-This uses a private D-Bus session and temporary XDG settings, leaving the current desktop alone.
-It supplies the queued focus change explicitly because the headless session has no interactive seat,
-and checks that closing the front of a pile leaves each survivor's frame origin fixed during one resize.
-It rotates the pile before each close to check that the remaining order stays stable.
-The constrained-window check verifies that a Wayland window already at its minimum size still moves
-when the requested tile is smaller, with animations enabled and disabled.
-The grab check delivers focus/grab callbacks explicitly in the headless session and verifies real
-window geometry for six scenarios: queued focus swaps, clicks without displacement, short drags,
-keyboard movement and resizing. It checks that the whole pile waits during the grab and is restored
-after release; it does not simulate physical mouse input.
-
-The multi-monitor check uses two virtual displays. It verifies navigation between singleton
-and multi-window piles, cycling on the free axis, drops onto the shared secondary layout
-after a workspace switch, and clicks which raise a window without changing focus, both
-with and without a grab. It also checks migration into a populated secondary display,
-regrouping existing windows when workspace mode changes, and workspace reindexing.
-Workspace events are checked with both a stale position cache and a cache already
-updated by geometry processing: membership and pile order follow the layout tree.
-Navigation uses real Mutter focus changes. Shell focus and native grab callbacks are
-delivered explicitly because the headless compositor has no interactive seat. Conditions
-are polled with a timeout instead of assuming focus has settled after a fixed delay.
-
-## Checklists
-
-Tasks for a tester to verify when approving a patch. Use complex window layouts and at least two displays. Turn on active hint during testing.
-
-### Panel menu and preferences
-
-- [ ] The panel menu contains **Reset Windows** and **Preferences**; Active Hint and gap controls are available only in Preferences.
-- [ ] Reset Windows collects the current workspace's ordinary application windows into one pile on the focused window's monitor. Floating, minimized, maximized and fullscreen windows are included; dialogs and windows pinned to all workspaces are left alone.
-- [ ] The previously focused window remains in front. Other workspaces keep their layouts, including their piles.
-- [ ] Resetting with tiling disabled enables tiling without rearranging other workspaces. Repeating a reset, or resetting an empty workspace, is harmless.
-- [ ] Preferences retains the saved Active Hint switch, border radius and color, including alpha. Changes apply immediately to the shell, and the radius remains within 0–30 pixels.
-- [ ] The color chooser is part of Preferences, and the preferences window scrolls to reach every setting.
-
-### Window movement animations
-
-- [ ] Keyboard moves, swaps, tiling rearrangements and stack rotations transition smoothly, including changes in size.
-- [ ] Holding a movement shortcut redirects the current animation without snapping back or playing a backlog.
-- [ ] Close the front or a background window in a pile, including reducing two windows to one: the remaining windows move and resize together without an intermediate arrangement.
-- [ ] Redirect a running animation: the transition starts at its current visual position and receives a full duration. Repeated requests for the same target do not restart it.
-- [ ] Mouse dragging and interactive resizing remain immediate; dropping a window animates its final placement.
-- [ ] The active hint, drawn stack titles and visible adjustment overlay follow the moving window.
-- [ ] Test Wayland and XWayland applications, CSD shadows, minimum window sizes, and displays with different scales.
-- [ ] Disable system animations, or enable reduced motion: layout changes are immediate. Changing these settings during a transition also restores the actual window immediately.
-- [ ] Maximize, fullscreen, minimize or close a window mid-transition: GNOME's effects work and no snapshot or transform remains.
-- [ ] Enter overview, change workspace, lock the screen, change displays, or disable the extension during a transition: no snapshot or invisible window remains.
-- [ ] Re-enable the extension: initial layout restoration is immediate and subsequent moves animate normally.
-
-## With tiling enabled
-
-### Tiling
-
-- [ ] Super direction keys changes focus in the correct direction
-- [ ] Super H/J/K/L can leave both singleton and multi-window piles for an adjacent display, with horizontal and vertical display layouts.
-- [ ] Windows moved with the keyboard tile into place
-- [ ] Windows moved with the mouse tile into place
-- [ ] A window which is dragged by less than the dead zone of the preferences returns to the tile which it came from, without re-arranging, stacking or floating, and without the placement overlay appearing.
-- [ ] A window which is dragged further than the dead zone is placed as it was before, and dragging it back into its own tile within the dead zone keeps it there.
-- [ ] Windows swap with the keyboard (test with different size windows)
-- [ ] Windows can be resized with the keyboard (Test resizing four windows above, below, right, and left to ensure shortcut consistency)
-- [ ] Windows can be resized with the mouse
-- [ ] Minimizing a window detaches it from the tree and re-tiles remaining windows
-- [ ] Unminimizing a window re-tiles the window
-- [ ] Maximizing with the keyboard (`Super` `M`) covers tiled windows
-- [ ] Unmaximizing with keyboard (`Super` `M`) re-tiles into place
-- [ ] Maximizing with the mouse covers tiled windows
-- [ ] Unmaximizing with mouse re-tiles into place
-- [ ] Full-screening removes the active hint and full-screens on one display 
-- [ ] Unfull-screening adds the active hint and re-tiles into place
-- [ ] Maximizing a YouTube video fills the screen and unmaximizing retiles the browser in place
-- [ ] VIM shortcuts work as direction keys
-- [ ] `Super` `O` changes window orientation
-- [ ] `Super` `G` floats and then re-tiles a window
-- [ ] Float a window with `Super` `G`. It should be movable and resizeable in window management mode with keyboard keys
-- [ ] `Super` `Q` Closes a window
-- [ ] Turn off auto-tiling. New windows launch floating.
-- [ ] Turn on auto-tiling. Windows automatically tile.
-- [ ] Disabling and enabling auto-tiling correctly handles minimized, maximized, fullscreen, floating, and non-floating windows (This test needs a better definition, steps, or to be separated out.)
-
-### Stacking
-
-- [ ] Windows can be moved into a stack.
-- [ ] Windows can be moved out of a stack.
-- [ ] Directional move shortcuts take the front window out of the pile in all four directions; the remaining windows keep their order.
-- [ ] Windows inside and outside of a stack can be swapped multiple times and in both directions.
-- [ ] Moving the last window out of a stack works as expected.
-- [ ] Stacks can be resized with the keyboard.
-- [ ] Stacks can be resized with the mouse.
-- [ ] Lock and unlock the screen-- stacks should still exist and windows should not have moved.
-- [ ] Full-screen an application within the stack, then quit the application-- the remaining windows should be visible.
-- [ ] Every window of the stack is visible as a cascading pile, and the entire pile fits inside of the stack's area.
-- [ ] Clicking a window of the stack displays it completely, in front of the other windows of the stack.
-- [ ] Raising an already focused background window moves it into the front slot and leaves the other windows' edges exposed.
-- [ ] Press and hold the exposed title bar of a background window, then release without dragging: the clicked window ends in front and every other window retains an exposed edge.
-- [ ] Repeat for the back, middle and front windows, including quick clicks and slight drags within the dead zone, with both Wayland and XWayland applications.
-- [ ] A stack which has windows to its left or right is cycled with `Super` + `Up`/`Down`, while `Super` + `Left`/`Right` moves focus between the tiles.
-- [ ] A stack which has windows above or below it is cycled with `Super` + `Left`/`Right`, while `Super` + `Up`/`Down` moves focus between the tiles.
-- [ ] A stack which has windows both beside it and above or below it is not cycled, and every direction key moves focus between the tiles.
-- [ ] Cycling brings every window of the stack to the front in turn, forwards with `Right`/`Down` and backwards with `Left`/`Up`.
-- [ ] The direction keys which move focus between the tiles land on the window which the neighbouring stack displays in front, and never on the window behind it.
-- [ ] A stack which fills the display is still cycled by every direction key, as there is no tile to move focus to.
-- [ ] Focus can still be shifted out of a stack which holds a single window.
-- [ ] Changing the stack offsets in the preferences re-arranges the stacks, and a value of `0` displays the windows on top of one another.
-- [ ] Adding and removing windows from a stack does not scramble the order of the pile.
-
-### Window Titles in Piles
-
-- [ ] "Window Titles in Piles" in the panel menu opens the rules editor on the list of the same name, and the editor lists the rules of floating windows when it is opened from "Floating Window Exceptions".
-- [ ] Selecting a window from the editor adds a rule for the window or for its application to the list which the editor was opened with, and returns to that list.
-- [ ] Deleting a rule from either list updates the shell, and the drawn titles are redrawn.
-- [ ] Adding a window with "Window Titles in Piles" draws its title over the part of its title bar which the window behind it exposes, once it is stacked behind another window.
-- [ ] The drawn title is centered in the exposed part of the title bar, both horizontally and vertically.
-- [ ] The window which is displayed in front is never drawn over, as it displays its own title bar.
-- [ ] The drawn titles follow the windows when the pile is rotated, when the offsets are changed, and when a window is added to or removed from the stack.
-- [ ] A window whose title changes updates the drawn title.
-- [ ] The drawn titles are hidden by a window which is dragged, by a fullscreen window in the stack, and by switching to another workspace.
-- [ ] The rules of "Window Titles in Piles" are kept when the Floating Window Exceptions editor saves the configuration.
-
-### Workspaces
-
-- [ ] Windows can be moved to another workspace with the keyboard
-- [ ] Windows can be moved to another workspace with the mouse
-- [ ] Windows can be moved to workspaces between existing workspaces
-- [ ] Moving windows to another workspace re-tiled the previous and new workspace
-- [ ] Active hint is present on the new workspace and once the window is returned to its previous workspace
-- [ ] Floating windows move across workspaces
-- [ ] Remove windows from the 2nd worspace in a 3 workspace setup. The 3rd workspace becomes the 2nd workspace, and tiling is unaffected by the move.
-
-### Displays
-
-- [ ] Windows move across displays in adjustment mode with direction keys
-- [ ] Windows move across displays with the mouse
-- [ ] Changing the primary display moves the top bar. Window heights adjust on all monitors for the new position.
-- [ ] Unplug a display - windows from the display retile on a new workspace on the remaining display
-- [ ] Plug an additional display into a laptop - windows and workspaces don't changes
-- [ ] NOTE: Add vertical monitor layout test
-- [ ] With workspaces only on the primary display, switch workspaces and drop windows onto the secondary display: windows join its existing layout and keep exposed pile edges.
-
-### Launcher
-
-- [ ] All windows on all workspaces appear on launch
-- [ ] Choosing an app on another workspace moves workspaces and focus to that app
-- [ ] Launching an application works
-- [ ] Typing text and then removing it will re-show those windows
-- [ ] Search works for applications and windows
-- [ ] Search works for GNOME settings panels
-- [ ] Search for "Extensions". There should be only one entry.
-- [ ] The overlay hint correctly highlights the selected window
-- [ ] Open windows are sorted above applications (e.g. "web browser")
-- [ ] t: executes a command in a terminal
-- [ ] : executes a command in sh
-- [ ] = calculates an equation
-- [ ] Search results are as expected:
-    - `cal` returns Calendar and Calculator before Color
-    - `pops` returns Popsicle first
-    - `shop` returns the Pop!_Shop first
-
-### Window Titles
-
-- [ ] Disabling window titles using global (Pop Shell) option works for Shell Shortcuts, LibreOffice, etc.
-- [ ] Disabling window titles in Firefox works (Check debian and flatpak packages)
-
-### Floating Exceptions
-
-- [ ] Add a window to floating exceptions-- it should float immediately.
-- [ ] Close and re-open the window-- it should float when opened.
-- [ ] Add an app to floating exceptions-- it should float immediately.
-- [ ] Close and re-open the app-- it should float when opened.
-
-## With Tiling Disabled
-
-### Tiling
-
-- [ ] Super direction keys changes focus in the correct direction
-- [ ] Windows can be moved with the keyboard
-- [ ] Windows can be moved with the mouse
-- [ ] Windows swap with the keyboard (test with different size windows)
-- [ ] Windows can be resized with the keyboard
-- [ ] Windows can be resized with the mouse
-- [ ] Windows can be half-tiled left and right with `Ctrl``Super``left`/`right`
-
-### Displays
-
-- [ ] Windows move across displays in adjustment mode with directions keys
-- [ ] Windows move across displays with the mouse
-
-### Miscellaneous
-
-- [ ] Close all windows-- no icons should be active in the GNOME launcher.
-- [ ] Open a window, enable tiling, stack the window, move to a different workspace, and disable tiling. The window should not become visible on the empty workspace.
-- [ ] With tiling still disabled, minimize the single window. The active hint should go away.
-- [ ] Maximize a window, then open another app with the Activities overview. The newly-opened app should be visible and focused.
-- [ ] Maximize a window, then open another app with the launcher. The newly-opened app should be visible and focused.
+Inspect `pop-shell:` messages and JS errors together with the action that triggered them.

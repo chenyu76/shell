@@ -125,4 +125,4 @@ export default class PileGrabCheck extends Extension {
 
 if __name__ == '__main__':
     run(Path(__file__).with_name('pile-runtime-client.mjs').read_text(), CHECK, 'pile-grab-check', 6,
-        seconds=16, full_extension=True)
+        seconds=16)
