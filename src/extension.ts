@@ -62,11 +62,9 @@ const {
     overview,
     panel,
     setThemeStylesheet,
-    screenShield,
     sessionMode,
     windowAttentionHandler,
 } = Main;
-import { ScreenShield } from 'resource:///org/gnome/shell/ui/screenShield.js';
 import {
     // AppSwitcher,
     // AppIcon,
@@ -100,12 +98,6 @@ interface Display {
 
 interface Monitor extends Rectangular {
     index: number;
-}
-
-interface Injection {
-    object: any;
-    method: string;
-    func: any;
 }
 
 export class Ext extends Ecs.System<ExtEvent> {
@@ -199,16 +191,14 @@ export class Ext extends Ecs.System<ExtEvent> {
     /** A display config update is triggered on a workspace addition */
     ignore_display_update: boolean = false;
 
-    /** Functions replaced in GNOME */
-    injections: Array<Injection> = new Array();
-
     /** The window that was focused before the last window */
     private prev_focused: [null | Entity, null | Entity] = [null, null];
 
     /** Initially set to true when the extension is initializing */
     init: boolean = true;
 
-    was_locked: boolean = false;
+    /** Preserve the tiling tree while the lock screen owns the displays. */
+    suspended_for_lock: boolean = false;
 
     /** Set when a window is being moved by the mouse */
     moved_by_mouse: boolean = false;
@@ -350,26 +340,20 @@ export class Ext extends Ecs.System<ExtEvent> {
 
             /** Window Event */
             case 2:
-                let win = event.window;
+                const win = event.window;
 
                 /** Validate that the window's actor still exists. */
                 if (!win.actor_exists()) return;
 
                 if (event.kind.tag === 1) {
-                    const { window } = event;
+                    const movement = this.movements.remove(win.entity);
+                    // Only tiled requests can be discarded: the tree rebuilds
+                    // their geometry after the lock screen releases the displays.
+                    if (!movement || (sessionMode.isLocked && this.auto_tiler?.attached.contains(win.entity))) return;
 
-                    let movement = this.movements.remove(window.entity);
-                    if (!movement) return;
+                    this.window_animations.move(win, movement, this.should_animate_window(win));
 
-                    let actor = window.meta.get_compositor_private();
-                    if (!actor) {
-                        this.auto_tiler?.detach_window(this, window.entity);
-                        return;
-                    }
-
-                    this.window_animations.move(window, movement, this.should_animate_window(window));
-
-                    this.monitors.insert(window.entity, [win.meta.get_monitor(), win.workspace_id()]);
+                    this.monitors.insert(win.entity, [win.meta.get_monitor(), win.workspace_id()]);
 
                     if (win.activate_after_move) {
                         win.activate_after_move = false;
@@ -448,7 +432,7 @@ export class Ext extends Ecs.System<ExtEvent> {
                         break;
 
                     case GlobalEvent.MonitorsChanged:
-                        this.update_display_configuration(false);
+                        this.update_display_configuration();
                         break;
 
                     case GlobalEvent.OverviewShown:
@@ -731,8 +715,8 @@ export class Ext extends Ecs.System<ExtEvent> {
         return this.get_window(display.get_focus_window());
     }
 
-    /** Shifts focus along axes with neighbours, including on other monitors.
-     * Unoccupied axes cycle the pile; singleton piles always shift focus.
+    /** Shifts focus toward a neighbour in the pressed direction, including across monitors.
+     * Directions without a neighbour cycle the pile; singleton piles always shift focus.
      */
     stack_cycle(direction: Tiling.Direction) {
         // The keys which point down or right display the next window of the pile.
@@ -761,17 +745,12 @@ export class Ext extends Ecs.System<ExtEvent> {
             return;
         }
 
-        const idx = focused.stack;
         const sideways = direction === Tiling.Direction.Left || direction === Tiling.Direction.Right;
+        const target = select(window => window.stack !== focused.stack &&
+            shares_band(container.rect, Focus.window_area(this, window), sideways));
 
-        // Use the same tile areas to detect neighbours and select the target.
-        const neighbour = (window: Window.ShellWindow) => {
-            if (window.stack === idx || window.meta.minimized) return false;
-            return shares_band(container.rect, Focus.window_area(this, window), sideways);
-        };
-
-        if (this.active_window_list().some(neighbour)) {
-            this.activate_window(select(neighbour));
+        if (target) {
+            this.activate_window(target);
             return;
         }
 
@@ -786,9 +765,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         if (cycle()) return;
 
-        // Every window of the stack has been displayed in front of the others, and
-        // the keys of this axis have no window to move the focus to, so the stack
-        // is cycled again rather than leaving the key press without an effect.
+        // Start another cycle once every member has been shown.
         container.reset_cycle();
         cycle();
     }
@@ -797,26 +774,6 @@ export class Ext extends Ecs.System<ExtEvent> {
     get_window(meta: Meta.Window | null): Window.ShellWindow | null {
         let entity = this.window_entity(meta);
         return entity ? this.windows.get(entity) : null;
-    }
-
-    inject(object: any, method: string, func: any) {
-        const prev = object[method];
-        this.injections.push({ object, method, func: prev });
-        object[method] = func;
-    }
-
-    injections_add() {
-        const screen_unlock_fn = ScreenShield.prototype['deactivate'];
-        this.inject(ScreenShield.prototype, 'deactivate', (args: any) => {
-            screen_unlock_fn.apply(screenShield, [args]);
-            this.update_display_configuration(true);
-        });
-    }
-
-    injections_remove() {
-        for (const { object, method, func } of this.injections.splice(0)) {
-            object[method] = func;
-        }
     }
 
     load_settings() {
@@ -1980,7 +1937,7 @@ export class Ext extends Ecs.System<ExtEvent> {
         }
 
         this.connect(display, 'workareas-changed', () => {
-            this.update_display_configuration(true);
+            this.update_display_configuration();
         });
 
         this.size_changed_signal = this.connect(wim, 'size-change', (_, actor, event, _before, _after) => {
@@ -2083,8 +2040,6 @@ export class Ext extends Ecs.System<ExtEvent> {
 
         // We have to connect this signal in an idle_add; otherwise work areas stop being calculated
         this.register_fn(() => {
-            if (screenShield?.locked) this.update_display_configuration(false);
-
             this.connect(display, 'notify::focus-window', () => {
                 // Disallow refocus if a modal window is active
                 if (Main.modalCount !== 0) {
@@ -2487,9 +2442,7 @@ export class Ext extends Ecs.System<ExtEvent> {
         this.moved_by_mouse = false;
     }
 
-    update_display_configuration_before() { }
-
-    update_display_configuration(workareas_only: boolean) {
+    update_display_configuration() {
         this.suppress_window_animations();
         if (!this.auto_tiler || sessionMode.isLocked) return;
 
@@ -2534,7 +2487,7 @@ export class Ext extends Ecs.System<ExtEvent> {
 
             this.workareas_update = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
                 this.register_fn(() => {
-                    this.update_display_configuration(workareas_only);
+                    this.update_display_configuration();
                 });
 
                 this.workareas_update = null;
@@ -2879,12 +2832,17 @@ export default class PopShellExtension extends Extension {
             _hide_skip_taskbar_windows();
         }
 
-        if (ext.was_locked) {
-            ext.was_locked = false;
+        if (ext.suspended_for_lock) {
+            ext.suspended_for_lock = false;
+            const resumed_ext = ext;
+            resumed_ext.register_fn(() => {
+                // Workspace notifications received while locked must not skip resumption.
+                resumed_ext.ignore_display_update = false;
+                resumed_ext.update_display_configuration();
+            });
             return;
         }
 
-        ext.injections_add();
         ext.signals_attach();
 
         disable_window_attention_handler();
@@ -2909,12 +2867,11 @@ export default class PopShellExtension extends Extension {
             ext.animate_windows = false;
             ext.window_animations.cancel_all();
             if (sessionMode.isLocked) {
-                ext.was_locked = true;
+                ext.suspended_for_lock = true;
                 return;
             }
 
             delete globalThis.popShellExtension;
-            ext.injections_remove();
             ext.signals_remove();
             ext.exit_modes();
             ext.stop_launcher_services();
