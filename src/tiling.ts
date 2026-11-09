@@ -16,6 +16,8 @@ import type { Fork } from './fork.js';
 import { AutoTiler } from './auto_tiler.js';
 
 import Meta from 'gi://Meta';
+import Clutter from 'gi://Clutter';
+import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 export enum Direction {
@@ -27,6 +29,7 @@ export enum Direction {
 
 export class Tiler {
     private keybindings: Object;
+    private grab: any = null;
 
     window: Entity | null = null;
 
@@ -499,13 +502,26 @@ export class Tiler {
 
             this.window = win.entity;
 
-            if (win.is_maximized()) {
-                win.meta.unmaximize();
-            }
-
             // Set overlay to match window
             ext.set_overlay(win.rect());
             ext.overlay.visible = true;
+
+            // Give the non-text overlay keyboard focus so the application's
+            // input method cannot consume management keys before Mutter does.
+            const grab = Main.pushModal(ext.overlay, { actionMode: Shell.ActionMode.NORMAL });
+            // Newer Mutter versions always grant grabs and omit get_seat_state().
+            if (grab.get_seat_state && !(grab.get_seat_state() & Clutter.GrabState.KEYBOARD)) {
+                Main.popModal(grab);
+                ext.overlay.visible = false;
+                this.window = null;
+                return;
+            }
+            this.grab = grab;
+
+            if (win.is_maximized()) {
+                win.meta.unmaximize();
+                ext.set_overlay(win.rect());
+            }
 
             if (!ext.auto_tiler || ext.contains_tag(win.entity, Tags.Floating)) {
                 // Make sure overlay is valid
@@ -563,6 +579,11 @@ export class Tiler {
 
         if (this.window) {
             this.window = null;
+
+            if (this.grab) {
+                Main.popModal(this.grab);
+                this.grab = null;
+            }
 
             // Disable overlay
             ext.overlay.visible = false;
